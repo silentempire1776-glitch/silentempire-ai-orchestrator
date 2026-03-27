@@ -1,0 +1,115 @@
+version: "3.9"
+
+services:
+  api:
+    build: ./services/api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+      - /srv/silentempire/app:/app
+      - /srv/silentempire:/srv/silentempire
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app:/ai-firm
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - silentnet
+
+  worker-default:
+    build:
+      context: .
+      dockerfile: services/workers/default/Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - silentnet
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - /srv/silentempire/data/redis:/data
+    command: redis-server --appendonly yes
+    networks:
+      - silentnet
+
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: silent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: silentempire
+    volumes:
+      - /srv/silentempire/data/postgres:/var/lib/postgresql/data
+    networks:
+      - silentnet
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - silentnet
+
+  openclaw:
+    image: ghcr.io/hostinger/hvps-openclaw:latest
+    container_name: openclaw
+    restart: unless-stopped
+    networks:
+      - silentnet
+    volumes:
+      - ./openclaw/workspace:/data/.openclaw/workspace
+    environment:
+      - OPENCLAW_WORKSPACE=/data/.openclaw/workspace
+      - API_BASE_URL=http://api:8000
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://silent:${POSTGRES_PASSWORD}@postgres:5432/silentempire
+    depends_on:
+      - api
+      - postgres
+      - redis
+
+  mission-control:
+    build:
+      context: /srv/silentempire/mission-control
+    container_name: mission-control
+    restart: unless-stopped
+    environment:
+      - JARVIS_PASSWORD=Money001/
+    volumes:
+      - /srv/silentempire/mission-control:/app
+    networks:
+      - silentnet
+
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:
+
+networks:
+  silentnet:
+    driver: bridge

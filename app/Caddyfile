@@ -1,0 +1,13 @@
+api.silentempireai.com {
+    reverse_proxy api:8000
+}
+
+jarvis.silentempireai.com {
+
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy app-api-1:8000
+    }
+
+    reverse_proxy mission-control:3000
+}

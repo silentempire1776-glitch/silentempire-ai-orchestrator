@@ -1,0 +1,342 @@
+import time
+import datetime
+import redis
+import socket
+import uuid
+from prometheus_client import Counter, Gauge, start_http_server
+
+from database import SessionLocal
+from models import Job, ProviderPricing, BudgetControl
+from ai_engine.router import run_model
+from logger import log_event
+from alerts import send_telegram_alert
+from models import ProviderHealth
+
+WORKER_ID = socket.gethostname()
+redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+MAX_INPUT_TOKENS_ESTIMATE = 4000
+MAX_OUTPUT_TOKENS_ESTIMATE = 4000
+
+# ===============================
+# METRICS
+# ===============================
+
+jobs_processed = Counter("se_jobs_processed_total", "Total jobs processed")
+jobs_failed = Counter("se_jobs_failed_total", "Total jobs failed")
+budget_current_spend = Gauge("se_budget_current_spend_usd", "Current daily spend")
+queue_depth = Gauge("se_queue_depth", "Current Redis queue depth")
+
+
+def update_queue_depth():
+    try:
+        depth = redis_client.llen("queue:default")
+        queue_depth.set(depth)
+    except Exception:
+        pass
+
+
+def get_pricing(db, provider, model):
+    pricing = (
+        db.query(ProviderPricing)
+        .filter(
+            ProviderPricing.provider == provider,
+            ProviderPricing.model == model
+        )
+        .first()
+    )
+
+    if not pricing:
+        raise Exception(f"No pricing configured for {provider}:{model}")
+
+    return pricing
+
+
+def estimate_max_cost(pricing):
+    input_cost = (MAX_INPUT_TOKENS_ESTIMATE / 1000) * pricing.input_cost_per_1k_tokens
+    output_cost = (MAX_OUTPUT_TOKENS_ESTIMATE / 1000) * pricing.output_cost_per_1k_tokens
+    return round(input_cost + output_cost, 8)
+
+
+# ===============================
+# BUDGET ROLLOVER
+# ===============================
+
+def ensure_daily_budget_exists(db):
+
+    today = datetime.datetime.utcnow().date().isoformat()
+
+    existing = (
+        db.query(BudgetControl)
+        .filter(BudgetControl.date == today)
+        .first()
+    )
+
+    if existing:
+        return existing
+
+    last_budget = (
+        db.query(BudgetControl)
+        .order_by(BudgetControl.date.desc())
+        .first()
+    )
+
+    if not last_budget:
+        raise Exception("No historical budget configuration found.")
+
+    new_budget = BudgetControl(
+        date=today,
+        daily_limit_usd=last_budget.daily_limit_usd,
+        current_spend_usd=0,
+        is_locked=False
+    )
+
+    db.add(new_budget)
+    db.commit()
+
+    log_event(
+        "budget_rollover_created",
+        date=today,
+        daily_limit=new_budget.daily_limit_usd
+    )
+
+    return new_budget
+
+
+def reserve_budget(db, amount):
+
+    budget = ensure_daily_budget_exists(db)
+
+    budget = (
+        db.query(BudgetControl)
+        .filter(BudgetControl.id == budget.id)
+        .with_for_update()
+        .first()
+    )
+
+    if not budget:
+        raise Exception("No budget configured for today.")
+
+    if budget.is_locked:
+        raise Exception("Daily budget locked.")
+
+    projected = budget.current_spend_usd + amount
+
+    if projected > budget.daily_limit_usd:
+        budget.is_locked = True
+        db.commit()
+
+        send_telegram_alert(
+            f"🚨 *SilentEmpireAI Budget Lock*\n"
+            f"Daily limit exceeded.\n"
+            f"Limit: ${budget.daily_limit_usd}\n"
+            f"Current: ${budget.current_spend_usd}"
+        )
+
+        raise Exception("Daily budget exceeded (pre-check).")
+
+    budget.current_spend_usd = projected
+    db.commit()
+
+    budget_current_spend.set(budget.current_spend_usd)
+
+    return budget
+
+
+def adjust_budget_after_execution(db, reserved_amount, actual_cost):
+
+    budget = ensure_daily_budget_exists(db)
+
+    budget = (
+        db.query(BudgetControl)
+        .filter(BudgetControl.id == budget.id)
+        .with_for_update()
+        .first()
+    )
+
+    budget.current_spend_usd -= reserved_amount
+    budget.current_spend_usd += actual_cost
+
+    db.commit()
+
+    budget_current_spend.set(budget.current_spend_usd)
+
+
+def calculate_actual_cost(pricing, tokens_input, tokens_output):
+
+    input_cost = (tokens_input or 0) / 1000 * pricing.input_cost_per_1k_tokens
+    output_cost = (tokens_output or 0) / 1000 * pricing.output_cost_per_1k_tokens
+
+    return round(input_cost + output_cost, 8)
+
+
+def run_ai_task(payload):
+    model = payload.get("model", "gpt-4o")
+    messages = payload.get("messages", [])
+
+    return run_model(
+        model=model,
+        messages=messages
+    )
+
+# ===============================
+# PROVIDER HEALTH
+# ===============================
+
+def update_provider_health(db, provider, success):
+
+    record = db.query(ProviderHealth).filter(
+        ProviderHealth.provider == provider
+    ).first()
+
+    if not record:
+        record = ProviderHealth(provider=provider)
+        db.add(record)
+        db.commit()
+        record = db.query(ProviderHealth).filter(
+            ProviderHealth.provider == provider
+        ).first()
+
+    if success:
+        record.success_count += 1
+    else:
+        record.failure_count += 1
+
+    total = record.success_count + record.failure_count
+
+    if total > 0:
+        record.health_score = record.success_count / total
+
+    record.last_updated = datetime.datetime.utcnow()
+
+    db.commit()
+
+
+# ===============================
+# JOB PROCESSING
+# ===============================
+
+def process_job(job_id):
+
+    correlation_id = str(uuid.uuid4())
+    db = SessionLocal()
+    job = None  # critical for exception safety
+
+    try:
+
+        job = db.query(Job).filter(Job.id == job_id).first()
+
+        if not job:
+            log_event(
+                "job_not_found",
+                correlation_id=correlation_id,
+                job_id=str(job_id)
+            )
+            return
+
+        job.status = "running"
+        job.started_at = datetime.datetime.utcnow()
+        db.commit()
+
+        log_event(
+            "job_started",
+            correlation_id=correlation_id,
+            job_id=str(job.id)
+        )
+
+        start_time = time.time()
+
+        provider_name = "openai" if job.payload.get("model", "").startswith("gpt") else "nvidia"
+        model_name = job.payload.get("model", "gpt-4o")
+
+        pricing = get_pricing(db, provider_name, model_name)
+        max_possible_cost = estimate_max_cost(pricing)
+
+        reserve_budget(db, max_possible_cost)
+        reserved_amount = max_possible_cost
+
+        result = run_ai_task(job.payload)
+
+        job.result = result.get("output")
+        job.provider = result.get("provider")
+        job.model_used = result.get("model_used")
+        job.tokens_input = result.get("tokens_input")
+        job.tokens_output = result.get("tokens_output")
+
+        actual_cost = calculate_actual_cost(
+            pricing,
+            job.tokens_input,
+            job.tokens_output
+        )
+
+        adjust_budget_after_execution(db, reserved_amount, actual_cost)
+
+        job.estimated_cost_usd = actual_cost
+        job.status = "completed"
+        job.completed_at = datetime.datetime.utcnow()
+
+        db.commit()
+
+        jobs_processed.inc()
+        update_provider_health(db, provider_name, True)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        log_event(
+            "job_completed",
+            correlation_id=correlation_id,
+            job_id=str(job.id),
+            duration_ms=duration_ms,
+            estimated_cost_usd=actual_cost
+        )
+
+    except Exception as e:
+
+        jobs_failed.inc()
+
+        log_event(
+            "job_exception",
+            correlation_id=correlation_id,
+            job_id=str(job_id),
+            error=str(e)
+        )
+
+        if job:
+            job.retry_count = (job.retry_count or 0) + 1
+            job.error_message = str(e)
+            job.status = "failed"
+            job.completed_at = datetime.datetime.utcnow()
+            db.commit()
+            update_provider_health(db, provider_name if 'provider_name' in locals() else "unknown", False)
+            send_telegram_alert(
+                f"❌ *Job Failed*\n"
+                f"Job ID: {job.id}\n"
+                f"Error: {str(e)}"
+            )
+
+            redis_client.rpush("queue:dead", str(job.id))
+
+    finally:
+        db.close()
+
+
+# ===============================
+# MAIN LOOP
+# ===============================
+
+def main():
+    start_http_server(8001)
+    log_event("worker_started")
+
+    while True:
+        update_queue_depth()
+
+        job_data = redis_client.brpop("queue:default", timeout=5)
+
+        if job_data:
+            _, job_id = job_data
+            process_job(job_id)
+
+
+if __name__ == "__main__":
+    main()

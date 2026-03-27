@@ -1,0 +1,479 @@
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+from database import engine, SessionLocal
+from models import Base, Job
+import redis
+import datetime
+from sqlalchemy import func
+import asyncio
+
+loop = None
+
+# --------------------------------------------------
+# LOG STREAM BUFFER
+# --------------------------------------------------
+
+log_buffer = []
+
+connected_clients = []
+
+def log_event(message: str):
+
+    print(message)
+
+    log_buffer.append(message)
+
+    global loop
+
+    if loop is None:
+        return
+
+    for client in connected_clients:
+        try:
+            asyncio.run_coroutine_threadsafe(
+                client.send_text(message),
+                loop
+            )
+        except Exception:
+            pass
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    global loop
+    loop = asyncio.get_running_loop()
+
+# ==========================================
+# FORCE TABLE CREATION ON STARTUP
+# ==========================================
+
+print("CREATING DATABASE TABLES...")
+Base.metadata.create_all(bind=engine)
+print("DATABASE TABLE CHECK COMPLETE.")
+
+redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
+
+
+# ===============================
+# REQUEST MODEL
+# ===============================
+
+class JobRequest(BaseModel):
+    type: str
+    payload: dict
+
+
+# ===============================
+# HEALTH
+# ===============================
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ===============================
+# DEAD LETTER QUEUE
+# ===============================
+
+@app.get("/admin/dead")
+def view_dead_queue():
+    dead_jobs = redis_client.lrange("queue:dead", 0, -1)
+    return {
+        "dead_count": len(dead_jobs),
+        "job_ids": dead_jobs
+    }
+
+
+@app.post("/admin/retry/{job_id}")
+def retry_dead_job(job_id: str):
+    db = SessionLocal()
+    job = db.query(Job).filter(Job.id == job_id).first()
+
+    if not job:
+        db.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "failed":
+        db.close()
+        raise HTTPException(status_code=400, detail="Job is not failed")
+
+    # Reset job state
+    job.status = "pending"
+    job.retry_count = 0
+    job.error_message = None
+    job.started_at = None
+    job.completed_at = None
+    db.commit()
+
+    # Remove from dead queue
+    redis_client.lrem("queue:dead", 0, job_id)
+
+    # Requeue
+    redis_client.rpush("queue:default", job_id)
+
+    db.close()
+
+    return {"message": f"Job {job_id} requeued successfully"}
+
+
+# ===============================
+# CREATE JOB
+# ===============================
+
+@app.post("/jobs")
+def create_job(request: JobRequest):
+    db = SessionLocal()
+
+    job = Job(
+        type=request.type,
+        payload=request.payload,
+        status="pending"
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    redis_client.rpush("queue:default", str(job.id))
+
+    db.close()
+
+    return {"job_id": str(job.id)}
+
+
+# ===============================
+# GET JOB
+# ===============================
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    db = SessionLocal()
+    job = db.query(Job).filter(Job.id == job_id).first()
+    db.close()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "payload": job.payload,
+        "result": job.result
+    }
+
+
+# ===============================
+# METRICS
+# ===============================
+
+@app.get("/metrics")
+def get_metrics():
+    db = SessionLocal()
+
+    total_jobs = db.query(Job).count()
+    pending_jobs = db.query(Job).filter(Job.status == "pending").count()
+    running_jobs = db.query(Job).filter(Job.status == "running").count()
+    completed_jobs = db.query(Job).filter(Job.status == "completed").count()
+    failed_jobs = db.query(Job).filter(Job.status == "failed").count()
+
+    dead_queue_size = redis_client.llen("queue:dead")
+    active_queue_size = redis_client.llen("queue:default")
+
+    db.close()
+
+    return {
+        "total_jobs": total_jobs,
+        "pending_jobs": pending_jobs,
+        "running_jobs": running_jobs,
+        "completed_jobs": completed_jobs,
+        "failed_jobs": failed_jobs,
+        "active_queue_size": active_queue_size,
+        "dead_queue_size": dead_queue_size
+    }
+
+# ==========================================
+# USAGE METRICS ENDPOINT
+# ==========================================
+
+from sqlalchemy import func
+import datetime
+
+
+@app.get("/metrics/usage")
+def get_usage_metrics():
+    db = SessionLocal()
+
+    try:
+        # -------------------------------
+        # ALL TIME TOTALS
+        # -------------------------------
+
+        total_tokens_input = db.query(
+            func.coalesce(func.sum(Job.tokens_input), 0)
+        ).scalar()
+
+        total_tokens_output = db.query(
+            func.coalesce(func.sum(Job.tokens_output), 0)
+        ).scalar()
+
+        total_cost = db.query(
+            func.coalesce(func.sum(Job.estimated_cost_usd), 0.0)
+        ).scalar()
+
+        # -------------------------------
+        # COST BY PROVIDER
+        # -------------------------------
+
+        provider_rows = db.query(
+            Job.provider,
+            func.coalesce(func.sum(Job.estimated_cost_usd), 0.0)
+        ).group_by(Job.provider).all()
+
+        provider_breakdown = {
+            row[0]: float(row[1])
+            for row in provider_rows if row[0]
+        }
+
+        # -------------------------------
+        # COST BY MODEL
+        # -------------------------------
+
+        model_rows = db.query(
+            Job.model_used,
+            func.coalesce(func.sum(Job.estimated_cost_usd), 0.0)
+        ).group_by(Job.model_used).all()
+
+        model_breakdown = {
+            row[0]: float(row[1])
+            for row in model_rows if row[0]
+        }
+
+        # -------------------------------
+        # LAST 24 HOURS
+        # -------------------------------
+
+        since = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+
+        last_24h_cost = db.query(
+            func.coalesce(func.sum(Job.estimated_cost_usd), 0.0)
+        ).filter(
+            Job.completed_at >= since
+        ).scalar()
+
+        return {
+            "all_time": {
+                "tokens_input": int(total_tokens_input or 0),
+                "tokens_output": int(total_tokens_output or 0),
+                "total_cost_usd": float(total_cost or 0.0)
+            },
+            "last_24_hours": {
+                "cost_usd": float(last_24h_cost or 0.0)
+            },
+            "by_provider": provider_breakdown,
+            "by_model": model_breakdown
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
+
+# --------------------------------------------------
+# CHAIN LAUNCH ENDPOINT
+# --------------------------------------------------
+
+from pydantic import BaseModel
+from chain_bridge import launch_chain
+
+class ChainRequest(BaseModel):
+    target: str
+    product: str
+
+@app.post("/launch-chain")
+def launch_chain_endpoint(req: ChainRequest):
+
+    launch_chain(req.target, req.product)
+
+    return {"status": "chain_started"}
+
+
+
+# --------------------------------------------------
+# FAST API ENDPOINTS - FILE BROWSER
+# --------------------------------------------------
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import os
+
+app = FastAPI()
+
+BASE_PATH = "/ai-firm"
+
+
+# --------------------------------------------------
+# FILE LISTING
+# --------------------------------------------------
+
+@app.get("/files")
+def list_files(path: str = ""):
+
+    clean_path = path.lstrip("/")
+    full_path = os.path.abspath(os.path.join(BASE_PATH, clean_path))
+
+    if not full_path.startswith(BASE_PATH):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Directory listing
+    if os.path.isdir(full_path):
+
+        files = [
+            {
+                "name": name,
+                "isDirectory": os.path.isdir(os.path.join(full_path, name))
+            }
+            for name in sorted(os.listdir(full_path))
+        ]
+
+        return {"files": files}
+
+    # File content
+    with open(full_path, "r") as f:
+        content = f.read()
+
+    return {"content": content}
+
+
+# --------------------------------------------------
+# FILE SAVE
+# --------------------------------------------------
+
+class FilePayload(BaseModel):
+    content: str = ""
+
+
+@app.post("/file")
+def save_file(path: str, payload: FilePayload):
+
+    clean_path = path.lstrip("/")
+    full_path = os.path.abspath(os.path.join(BASE_PATH, clean_path))
+
+    if not full_path.startswith(BASE_PATH):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+    with open(full_path, "w") as f:
+        f.write(payload.content)
+
+    return {"status": "saved"}
+
+
+# --------------------------------------------------
+# FILE DELETE
+# --------------------------------------------------
+
+@app.delete("/file")
+def delete_file(path: str):
+
+    clean_path = path.lstrip("/")
+    full_path = os.path.abspath(os.path.join(BASE_PATH, clean_path))
+
+    if not full_path.startswith(BASE_PATH):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    os.remove(full_path)
+
+    return {"status": "deleted"}
+
+
+# --------------------------------------------------
+# FILE CREATE
+# --------------------------------------------------
+
+@app.post("/create-file")
+def create_file(path: str):
+
+    clean_path = path.lstrip("/")
+    full_path = os.path.abspath(os.path.join(BASE_PATH, clean_path))
+
+    if not full_path.startswith(BASE_PATH):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if os.path.exists(full_path):
+        raise HTTPException(status_code=400, detail="File already exists")
+
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+    with open(full_path, "w") as f:
+        f.write("")
+
+    return {"status": "created"}
+
+
+# --------------------------------------------------
+# RUN TASK ENDPOINT
+# --------------------------------------------------
+
+from pydantic import BaseModel
+import uuid
+from shared.redis_bus import enqueue
+
+
+class RunPayload(BaseModel):
+    task: str
+
+
+@app.post("/run")
+def run_task(payload: RunPayload):
+
+    job_id = str(uuid.uuid4())
+
+    log_event(f"[orchestrator] job {job_id} received")
+
+    enqueue(
+        "queue.orchestrator",
+        {
+            "job_id": job_id,
+            "task": payload.task
+        }
+    )
+
+    return {
+        "status": "queued",
+        "job_id": job_id
+    }
+
+
+# ==========================================
+# WEBSOCKET LOG STREAM
+# ==========================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
+
+connected_clients = []
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+
+    await websocket.accept()
+    connected_clients.append(websocket)
+
+    try:
+        while True:
+            await asyncio.sleep(60)
+
+    except WebSocketDisconnect:
+        connected_clients.remove(websocket)

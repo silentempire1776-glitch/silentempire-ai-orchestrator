@@ -1,0 +1,7 @@
+sqlalchemy
+psycopg2-binary
+redis
+openai>=1.0.0
+requests
+prometheus-client
+requests
