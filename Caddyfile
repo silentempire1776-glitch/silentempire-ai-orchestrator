@@ -1,0 +1,12 @@
+jarvis.silentempireai.com {
+    reverse_proxy mission-control:3000
+}
+
+api.silentempireai.com {
+    reverse_proxy app-api-1:8000
+}
+
+# 🔥 CRITICAL FIX
+jarvis.silentempireai.com/api/* {
+    reverse_proxy app-api-1:8000
+}

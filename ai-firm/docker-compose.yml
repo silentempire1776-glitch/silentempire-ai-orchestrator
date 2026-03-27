@@ -1,0 +1,307 @@
+services:
+  base:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: ai-firm-base
+
+  jarvis-orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    container_name: jarvis-orchestrator
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      API_BASE_URL: http://api:8000
+      REDIS_URL: redis://app-redis-1:6379/0
+      DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
+      HEARTBEAT_INTERVAL: 1800
+      AUTONOMY_MODE: "false"
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  research-agent:
+    build:
+      context: .
+      dockerfile: agents/research/Dockerfile
+    container_name: research-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  revenue-agent:
+    build:
+      context: .
+      dockerfile: agents/revenue/Dockerfile
+    container_name: revenue-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  sales-agent:
+    build:
+      context: .
+      dockerfile: agents/sales/Dockerfile
+    container_name: sales-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  growth-agent:
+    build:
+      context: .
+      dockerfile: agents/growth/Dockerfile
+    container_name: growth-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  product-agent:
+    build:
+      context: .
+      dockerfile: agents/product/Dockerfile
+    container_name: product-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  legal-agent:
+    build:
+      context: .
+      dockerfile: agents/legal/Dockerfile
+    container_name: legal-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  systems-agent:
+    build:
+      context: .
+      dockerfile: agents/systems/Dockerfile
+    container_name: systems-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  timeout-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: jarvis-timeout-monitor
+    command: python -u /ai-firm/orchestrator/timeout_monitor.py
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    environment:
+      DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
+      PYTHONPATH: /ai-firm
+    networks:
+      - app_silentnet
+    restart: unless-stopped
+    depends_on:
+      - jarvis-orchestrator
+
+  tool-executor:
+    build:
+      context: .
+      dockerfile: tool_executor/Dockerfile
+    container_name: tool-executor
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      REQUIRE_APPROVAL: "false"
+    volumes:
+      - /srv/silentempire:/srv/silentempire
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - app_silentnet
+  mcp-memory:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: mcp-memory
+    restart: unless-stopped
+    command: python -u /ai-firm/mcp/servers/memory/main.py
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  mcp-llm-router:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: mcp-llm-router
+    restart: unless-stopped
+    command: python -u /ai-firm/mcp/servers/llm_router/main.py
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  mcp-filesystem:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: mcp-filesystem
+    restart: unless-stopped
+    command: python -u /ai-firm/mcp/servers/filesystem/main.py
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+      - /srv/silentempire/mission-control:/srv/silentempire/mission-control
+    networks:
+      - app_silentnet
+
+  mcp-crm:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: mcp-crm
+    restart: unless-stopped
+    command: python -u /ai-firm/mcp/servers/crm/main.py
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  mcp-infra:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    container_name: mcp-infra
+    restart: unless-stopped
+    command: python -u /ai-firm/mcp/servers/infra/main.py
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      PYTHONPATH: /ai-firm
+      REQUIRE_APPROVAL: "false"
+    volumes:
+      - /srv/silentempire:/srv/silentempire
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+  code-agent:
+    build:
+      context: .
+      dockerfile: agents/code/Dockerfile
+    container_name: code-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+      PYTHONPATH: /ai-firm
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+      - /srv/silentempire/app:/srv/silentempire/app
+    networks:
+      - app_silentnet
+
+  voice-agent:
+    build:
+      context: .
+      dockerfile: agents/voice/Dockerfile
+    container_name: voice-agent
+    restart: unless-stopped
+    env_file:
+      - /srv/silentempire/app/.env
+    environment:
+      REDIS_URL: redis://app-redis-1:6379/0
+      API_BASE_URL: http://api:8000
+      PYTHONPATH: /ai-firm
+      TELEPHONY_PROVIDER: twilio
+      STT_PROVIDER: deepgram
+      TTS_PROVIDER: elevenlabs
+      WEBHOOK_BASE_URL: ""
+      AUDIO_STORAGE_PATH: /ai-firm/logs/audio
+    volumes:
+      - /srv/silentempire/ai-firm:/ai-firm
+    networks:
+      - app_silentnet
+
+networks:
+  app_silentnet:
+    external: true

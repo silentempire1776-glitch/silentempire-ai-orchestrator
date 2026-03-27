@@ -1,0 +1,23 @@
+# Data and volumes
+data/
+*.log
+*.pyc
+__pycache__/
+.env
+
+# Node
+node_modules/
+.next/
+.turbo/
+dist/
+build/
+
+# Backups
+*.bak*
+*.save
+*.bak
+
+# Secrets
+*.key
+*.pem
+secrets/
