@@ -1323,3 +1323,184 @@ def delete_chat_session(session_id: str):
         return {"status": "error", "detail": str(e)}
     finally:
         db.close()
+
+
+@app.get("/metrics/model_benchmark")
+def get_model_benchmark():
+    """Get latest model benchmark results."""
+    import json as _json
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        # Try from database first
+        try:
+            row = db.execute(text(
+                "SELECT data, created_at FROM benchmark_results ORDER BY created_at DESC LIMIT 1"
+            )).fetchone()
+            if row:
+                return _json.loads(row[0])
+        except Exception:
+            pass
+
+        # Fall back to file
+        report_path = "/ai-firm/data/reports/systems/model-benchmark.json"
+        if os.path.exists(report_path):
+            with open(report_path) as f:
+                return _json.load(f)
+
+        return {"error": "No benchmark data yet", "run_at": None, "results": [], "assignments": {}}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
+
+
+@app.post("/metrics/model_benchmark/save")
+async def save_benchmark(request: Request):
+    """Save benchmark results from the benchmark script."""
+    import json as _json
+    try:
+        body = await request.json()
+        # Create table if needed
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS benchmark_results (
+                    id BIGSERIAL PRIMARY KEY,
+                    data TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "INSERT INTO benchmark_results (data) VALUES (:d)"
+            ), {"d": _json.dumps(body)})
+        return {"status": "saved"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.post("/metrics/model_benchmark/run")
+def run_benchmark_now():
+    """Trigger a benchmark run asynchronously."""
+    import subprocess, threading
+    def _run():
+        try:
+            subprocess.run(
+                ["docker", "exec", "jarvis-orchestrator",
+                 "python3", "/ai-firm/tools/model_benchmark.py"],
+                timeout=300, capture_output=True
+            )
+        except Exception as e:
+            print(f"[benchmark] run error: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "benchmark_started", "message": "Check /metrics/model_benchmark in ~60s"}
+
+
+@app.get("/metrics/models/summary")
+def get_models_summary():
+    """
+    Returns model health summary from latest benchmark + historical data.
+    Used by dashboard Model Health section.
+    """
+    import json as _json
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+    db = SessionLocal()
+    try:
+        # Get latest benchmark
+        benchmark = {}
+        report_path = "/ai-firm/data/reports/systems/model-benchmark.json"
+        if os.path.exists(report_path):
+            with open(report_path) as f:
+                benchmark = _json.load(f)
+
+        availability = benchmark.get("availability", {})
+        assignments  = benchmark.get("assignments", {})
+        role_configs = benchmark.get("role_configs", {})
+
+        # Build role fit map: model -> list of roles it's assigned to
+        role_fit: dict = {}
+        for role, info in assignments.items():
+            m = info.get("model", "")
+            if m not in role_fit:
+                role_fit[m] = []
+            role_fit[m].append(role)
+
+        # Build model priority map: model -> roles where it appears in priority list
+        model_roles: dict = {}
+        for role, config in role_configs.items():
+            for rank, m in enumerate(config.get("priority_models", []), 1):
+                if m not in model_roles:
+                    model_roles[m] = []
+                model_roles[m].append({"role": role, "rank": rank,
+                                        "description": config.get("description", "")})
+
+        # Get historical latency from model_health table
+        history = {}
+        try:
+            rows = db.execute(text(
+                "SELECT model, health_score, avg_latency_ms, success_count, failure_count, last_used"
+                " FROM model_health ORDER BY last_used DESC"
+            )).fetchall()
+            for r in rows:
+                history[r[0]] = {
+                    "health_score":  round(float(r[1] or 1.0), 3),
+                    "avg_latency_ms": int(r[2] or 0),
+                    "success_count": int(r[3] or 0),
+                    "failure_count": int(r[4] or 0),
+                    "last_used":     str(r[5]) if r[5] else None,
+                }
+        except Exception as e:
+            print("[models/summary] history error:", e)
+
+        # Compose final model list
+        models_out = []
+        for model, avail in availability.items():
+            short = model.split("/")[-1]
+            is_available = avail.get("available", False)
+            latency = avail.get("latency_ms", 9999)
+            hist = history.get(model, {})
+
+            # Compute real performance score (0-100)
+            # Based on: availability, latency, historical success rate
+            if not is_available:
+                perf_score = 0
+            else:
+                # Latency score: 100 at <300ms, 0 at >10000ms
+                lat_score = max(0, min(100, 100 - (latency - 300) / 97))
+                # Reliability score from history
+                total_calls = (hist.get("success_count", 0) + hist.get("failure_count", 0))
+                rel_score = (hist.get("success_count", 0) / total_calls * 100) if total_calls > 0 else 75.0
+                # Weighted: reliability matters more than raw speed
+                perf_score = round(rel_score * 0.6 + lat_score * 0.4, 1)
+
+            # Roles this model is assigned to (currently running for)
+            assigned_roles = role_fit.get(model, [])
+            # Roles this model is qualified for (in priority list)
+            qualified_roles = [r["role"] for r in model_roles.get(model, [])]
+
+            models_out.append({
+                "model":            model,
+                "short_name":       short,
+                "available":        is_available,
+                "latency_ms":       latency,
+                "performance_score": perf_score,
+                "assigned_to":      assigned_roles,
+                "good_for":         qualified_roles,
+                "history":          hist,
+                "benchmark_run":    benchmark.get("run_at"),
+            })
+
+        # Sort: available first, then by performance score
+        models_out.sort(key=lambda x: (-int(x["available"]), -x["performance_score"]))
+
+        return {
+            "models":        models_out,
+            "benchmark_run": benchmark.get("run_at"),
+            "total":         len(models_out),
+            "available":     sum(1 for m in models_out if m["available"]),
+        }
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+    finally:
+        db.close()

@@ -45,22 +45,19 @@ MAX_OUTPUT_TOKENS_ESTIMATE = 4000
 # ==========================================
 
 AGENT_MODEL_MAP = {
-    # Core agents — mapped to env vars
-    "jarvis":         os.getenv("MODEL_JARVIS_ORCHESTRATOR",  "qwen/qwen3.5-122b-a10b"),
-    "research":       os.getenv("MODEL_RESEARCH",             "qwen/qwen3.5-397b-a17b"),
-    "revenue":        os.getenv("MODEL_FINANCIAL_STRATEGY",   "nvidia/llama-3.3-nemotron-super-49b-v1"),
-    "sales":          os.getenv("MODEL_MARKETING",            "mistralai/mistral-large-3-675b-instruct-2512"),
-    "growth":         os.getenv("MODEL_STRATEGIC_PLANNING",   "nvidia/llama-3.3-nemotron-super-49b-v1"),
-    "product":        os.getenv("MODEL_CODING",               "qwen/qwen3.5-397b-a17b"),
-    "legal":          os.getenv("MODEL_LEGAL_STRUCTURING",    "nvidia/llama-3.3-nemotron-super-49b-v1"),
+    "jarvis":         os.getenv("MODEL_JARVIS_ORCHESTRATOR",  "moonshotai/kimi-k2.5"),
+    "research":       os.getenv("MODEL_RESEARCH",             "moonshotai/kimi-k2-thinking"),
+    "revenue":        os.getenv("MODEL_FINANCIAL_STRATEGY",   "moonshotai/kimi-k2.5"),
+    "sales":          os.getenv("MODEL_MARKETING",            "moonshotai/kimi-k2.5"),
+    "growth":         os.getenv("MODEL_STRATEGIC_PLANNING",   "moonshotai/kimi-k2.5"),
+    "product":        os.getenv("MODEL_CODING",               "moonshotai/kimi-k2-instruct"),
+    "legal":          os.getenv("MODEL_LEGAL_STRUCTURING",    "moonshotai/kimi-k2-thinking"),
     "systems":        os.getenv("MODEL_SYSTEMS",              "qwen/qwen3-coder-480b-a35b-instruct"),
     "code":           os.getenv("MODEL_MICRO_CODING",         "qwen/qwen3-coder-480b-a35b-instruct"),
     "voice":          os.getenv("MODEL_FAST_WORKER",          "meta/llama-4-maverick-17b-128e-instruct"),
-    # Legacy role names
-    "strategic_planning": os.getenv("MODEL_STRATEGIC_PLANNING", "nvidia/llama-3.3-nemotron-super-49b-v1"),
-    "tax_strategy":       os.getenv("MODEL_TAX_STRATEGY",       "nvidia/llama-3.3-nemotron-super-49b-v1"),
-    "financial_strategy": os.getenv("MODEL_FINANCIAL_STRATEGY", "nvidia/llama-3.3-nemotron-super-49b-v1"),
-    "legal_structuring":  os.getenv("MODEL_LEGAL_STRUCTURING",  "nvidia/llama-3.3-nemotron-super-49b-v1"),
+    "strategic_planning": os.getenv("MODEL_STRATEGIC_PLANNING", "moonshotai/kimi-k2.5"),
+    "financial_strategy": os.getenv("MODEL_FINANCIAL_STRATEGY", "moonshotai/kimi-k2.5"),
+    "legal_structuring":  os.getenv("MODEL_LEGAL_STRUCTURING",  "moonshotai/kimi-k2-thinking"),
     "fast_worker":        os.getenv("MODEL_FAST_WORKER",        "meta/llama-4-maverick-17b-128e-instruct"),
     "micro_coding":       os.getenv("MODEL_MICRO_CODING",       "qwen/qwen3-coder-480b-a35b-instruct"),
 }

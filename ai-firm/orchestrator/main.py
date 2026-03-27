@@ -444,7 +444,14 @@ def call_llm_jarvis(prompt: str) -> str:
                                 timeout=2)
                     except Exception:
                         pass
-                    return content.strip()
+                    content = content.strip()
+                    try:
+                        content, _exec_results = jarvis_process_exec_tags(content, _current_chain_id)
+                        if _exec_results:
+                            print(f"[JARVIS] Executed {len(_exec_results)} autonomous actions", flush=True)
+                    except Exception as _etag:
+                        print(f"[JARVIS] Exec tag error: {_etag}", flush=True)
+                    return content
                 print(f"[JARVIS_CHAT] Empty content from {attempt_model}, trying next", flush=True)
             except Exception as e:
                 print(f"[JARVIS_CHAT] {attempt_model} failed: {str(e)[:80]}", flush=True)

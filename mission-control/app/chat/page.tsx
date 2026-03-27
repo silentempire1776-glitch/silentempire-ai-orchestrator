@@ -116,6 +116,8 @@ export default function ChatPage() {
   const pollRef     = useRef<NodeJS.Timeout | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [attachedImage, setAttachedImage] = useState<{url:string;b64:string;name:string}|null>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -250,6 +252,17 @@ export default function ChatPage() {
     }, 2000)
   }
 
+  const handleImageAttach = async (file: File) => {
+    if (!file.type.startsWith("image/")) return
+    const url = URL.createObjectURL(file)
+    const b64 = await new Promise<string>((res) => {
+      const reader = new FileReader()
+      reader.onload = () => res((reader.result as string).split(",")[1])
+      reader.readAsDataURL(file)
+    })
+    setAttachedImage({ url, b64, name: file.name })
+  }
+
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
     if (!text || loading) return
@@ -268,7 +281,7 @@ export default function ChatPage() {
       const r = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, mode }),
+        body: JSON.stringify({ message: text, mode, ...(attachedImage ? { image_b64: attachedImage.b64, image_name: attachedImage.name } : {}) }),
       })
       const d = await r.json()
       poll(d.chain_id, thinkId, mode)
@@ -326,7 +339,9 @@ export default function ChatPage() {
 
       {showSessions && <div onClick={() => setShowSessions(false)} style={{ position: "fixed", inset: 0, zIndex: 99 }} />}
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "24px 0 16px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "24px 0 16px" }}
+        onDrop={e => { e.preventDefault(); const f=e.dataTransfer.files[0]; if(f?.type.startsWith("image/")) handleImageAttach(f) }}
+        onDragOver={e => e.preventDefault()}>
         <div style={{ maxWidth: "720px", margin: "0 auto", padding: "0 16px", display: "flex", flexDirection: "column", gap: "22px" }}>
 
           {messages.length === 0 && (
@@ -365,6 +380,7 @@ export default function ChatPage() {
                       <span style={{ fontSize: "12px", fontWeight: 600, color: msg.role === "error" ? "#f87171" : "#a78bfa" }}>{msg.role === "error" ? "Error" : msg.mode === "sys" ? "Systems" : "Jarvis"}</span>
                       {msg.mode === "sys" && msg.role !== "error" && <span style={{ fontSize: "9px", background: "rgba(234,179,8,0.1)", color: "#fbbf24", border: "1px solid rgba(234,179,8,0.2)", padding: "1px 6px", borderRadius: "10px" }}>⚡ EXEC</span>}
                       <span style={{ fontSize: "10px", color: "#334155" }}>{new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                      <button onClick={() => { navigator.clipboard.writeText(msg.content) }} style={{ background:"none",border:"none",color:"rgb(100,116,136)",cursor:"pointer",fontSize:"11px",padding:"1px 5px",borderRadius:"4px" }} title="Copy">⎘</button>
                     </div>
                     {msg.thinking ? <Thinking /> : msg.role === "error" ? <div style={{ fontSize: "13px", color: "#f87171" }}>{msg.content}</div> : <MD text={msg.content} />}
                   </div>
@@ -378,12 +394,25 @@ export default function ChatPage() {
 
       <div style={{ padding: "10px 16px 18px", background: "#0a0a0f", flexShrink: 0 }}>
         <div style={{ maxWidth: "720px", margin: "0 auto" }}>
+          {attachedImage && (
+            <div style={{ display:"flex",alignItems:"center",gap:"10px",padding:"8px 12px",background:"rgba(124,58,237,0.08)",border:"1px solid rgba(124,58,237,0.2)",borderRadius:"10px",marginBottom:"8px" }}>
+              <img src={attachedImage.url} style={{ height:"40px",borderRadius:"6px",objectFit:"cover" }} alt="preview"/>
+              <span style={{ fontSize:"11px",color:"rgb(156,172,194)",flex:1 }}>{attachedImage.name}</span>
+              <button onClick={() => setAttachedImage(null)} style={{ background:"none",border:"none",color:"rgb(100,116,136)",cursor:"pointer",fontSize:"14px" }}>✕</button>
+            </div>
+          )}
           <div style={{ background: "#1a1a2a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "10px 12px", display: "flex", alignItems: "flex-end", gap: "10px" }}>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display:"none" }}
+              onChange={e => { const f=e.target.files?.[0]; if(f) handleImageAttach(f) }}/>
+            <button onClick={() => fileRef.current?.click()}
+              style={{ flexShrink:0,background:"none",border:"none",color:"rgb(156,172,194)",cursor:"pointer",fontSize:"18px",padding:"0 4px" }}
+              title="Attach image">📎</button>
             <textarea
               ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
+              onPaste={e => { for(const item of Array.from(e.clipboardData.items)) { if(item.type.startsWith("image/")) { const f=item.getAsFile(); if(f){handleImageAttach(f);e.preventDefault()} } } }}
               onInput={e => { const t = e.target as HTMLTextAreaElement; t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px" }}
               disabled={loading}
               placeholder="Message Jarvis…"

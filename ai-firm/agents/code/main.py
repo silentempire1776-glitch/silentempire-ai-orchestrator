@@ -538,11 +538,42 @@ Return findings as JSON:
 # CHAIN MODE INSTRUCTION (offer_stack)
 # --------------------------------------------------
 
+
+
+# ==================================================
+# SUPERPOWERS SKILL LOADER
+# ==================================================
+SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
+
+def load_superpowers() -> str:
+    """Load all Superpowers skill files into a single context block."""
+    skills_text = []
+    skill_files = [
+        ("brainstorming.md",            "BRAINSTORMING"),
+        ("writing-plans.md",            "WRITING PLANS"),
+        ("test-driven-development.md",  "TEST-DRIVEN DEVELOPMENT"),
+        ("subagent-driven-development.md", "SUBAGENT-DRIVEN DEVELOPMENT"),
+        ("systematic-debugging.md",     "SYSTEMATIC DEBUGGING"),
+        ("requesting-code-review.md",   "REQUESTING CODE REVIEW"),
+    ]
+    for filename, label in skill_files:
+        path = os.path.join(SKILLS_DIR, filename)
+        try:
+            with open(path) as f:
+                content = f.read()
+            skills_text.append(f"=== SUPERPOWERS SKILL: {label} ===\n{content}\n")
+        except Exception:
+            pass
+    return "\n".join(skills_text)
+
+SUPERPOWERS_CONTEXT = load_superpowers()
+
 def build_code_instruction(executive: str, identity: str, soul: str, payload: dict) -> str:
     target  = payload.get("target", "")
     product = payload.get("product", "")
     upstream = payload.get("upstream_context", "")
 
+    return f"""\n{SUPERPOWERS_CONTEXT}\n"""  # Skills injected
     return f"""
 === EXECUTIVE STACK ===
 {executive}
