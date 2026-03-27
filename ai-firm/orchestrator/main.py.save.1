@@ -621,7 +621,10 @@ def jarvis_process_exec_tags(response_text: str, chain_id: str = None) -> tuple:
         container = match.group(1).strip()
         output = jarvis_read_logs(container)
         results.append("[logs: " + container + "]\n" + output[:500])
-        modified = modified.replace(match.group(0), f"``` [{container} logs] {output} ```")
+        modified = modified.replace(match.group(0), f"```
+[{container} logs]
+{output}
+```")
 
     # Process [DISPATCH:agent] tags
     dispatch_pattern = re.compile(r'\[DISPATCH:(\w+)\](.*?)\[/DISPATCH\]', re.DOTALL)
