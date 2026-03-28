@@ -451,28 +451,46 @@ export default function AgentsPage() {
                       <div style={{ marginTop:"8px" }}>
                         <div style={{ fontSize:"9px", color:CDim, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:"4px", fontWeight:700 }}>Top Picks</div>
                         <div style={{ display:"flex", flexDirection:"column", gap:"3px" }}>
-                          {AGENT_RECOMMENDED[a.id].map(rec => (
-                            <div key={rec.model}
-                              onClick={() => setOverride(a.id, rec.model)}
-                              style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
-                                padding:"4px 8px", borderRadius:"6px", cursor:"pointer",
-                                background: current===rec.model ? "rgba(124,58,237,0.12)" : "rgba(255,255,255,0.02)",
-                                border: current===rec.model ? "1px solid rgba(124,58,237,0.3)" : "1px solid rgba(255,255,255,0.05)",
-                                transition:"all 0.15s" }}>
-                              <div>
-                                <span style={{ fontSize:"10px", color: current===rec.model ? "#a78bfa" : C, fontWeight:600 }}>
-                                  {rec.model.split("/").pop()}
-                                </span>
-                                <span style={{ fontSize:"9px", color:CDim, marginLeft:"6px" }}>{rec.reason}</span>
+                          {AGENT_RECOMMENDED[a.id].map((rec, ri) => {
+                            const bm = benchmarkData[rec.model] || {}
+                            const recScore = bm.performance_score != null ? Number(bm.performance_score) : null
+                            const recLat   = bm.latency_ms || null
+                            const recColor = recScore == null ? CDim : recScore>=80?"#22c55e":recScore>=60?"#f59e0b":recScore>=30?"#f97316":"#ef4444"
+                            return (
+                              <div key={ri}
+                                onClick={() => setOverride(a.id, rec.model)}
+                                style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                                  padding:"4px 8px", borderRadius:"6px", cursor:"pointer",
+                                  background: current===rec.model ? "rgba(124,58,237,0.12)" : "rgba(255,255,255,0.02)",
+                                  border: current===rec.model ? "1px solid rgba(124,58,237,0.3)" : "1px solid rgba(255,255,255,0.05)",
+                                  transition:"all 0.15s" }}>
+                                <div style={{ flex:1, minWidth:0 }}>
+                                  <span style={{ fontSize:"10px", color: current===rec.model ? "#a78bfa" : C, fontWeight:600 }}>
+                                    {rec.model.split("/").pop()}
+                                  </span>
+                                  <span style={{ fontSize:"9px", color:CDim, marginLeft:"6px" }}>{rec.reason}</span>
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:"5px", flexShrink:0 }}>
+                                  {recScore != null && (
+                                    <span style={{ fontSize:"9px", fontWeight:700, color:recColor, minWidth:"28px", textAlign:"right" }}>
+                                      {recScore.toFixed(0)}%
+                                    </span>
+                                  )}
+                                  {recLat != null && (
+                                    <span style={{ fontSize:"9px", color:CDim, minWidth:"38px", textAlign:"right" }}>
+                                      {recLat}ms
+                                    </span>
+                                  )}
+                                  <span style={{ fontSize:"9px", fontWeight:700, padding:"1px 5px", borderRadius:"4px",
+                                    color: PROVIDER_COLORS[rec.provider] || CDim,
+                                    background: `${PROVIDER_COLORS[rec.provider] || "#475569"}18`,
+                                    border: `1px solid ${PROVIDER_COLORS[rec.provider] || "#475569"}33` }}>
+                                    {rec.provider}
+                                  </span>
+                                </div>
                               </div>
-                              <span style={{ fontSize:"9px", fontWeight:700, padding:"1px 5px", borderRadius:"4px",
-                                color: PROVIDER_COLORS[rec.provider] || CDim,
-                                background: `${PROVIDER_COLORS[rec.provider] || "#475569"}18`,
-                                border: `1px solid ${PROVIDER_COLORS[rec.provider] || "#475569"}33` }}>
-                                {rec.provider}
-                              </span>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       </div>
                     )}
