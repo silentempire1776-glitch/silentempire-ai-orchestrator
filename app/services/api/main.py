@@ -1444,14 +1444,48 @@ def get_models_summary():
                     role_fit[m] = []
                 role_fit[m].append(role)
 
-        # Build model priority map: model -> roles where it appears in priority list
-        model_roles: dict = {}
-        for role, config in role_configs.items():
-            for rank, m in enumerate(config.get("priority_models", []), 1):
-                if m not in model_roles:
-                    model_roles[m] = []
-                model_roles[m].append({"role": role, "rank": rank,
-                                        "description": config.get("description", "")})
+        # Build good_for map from hardcoded role-model affinity
+        # (role_configs removed from benchmark — this is the authoritative source)
+        GOOD_FOR_MAP = {
+            "moonshotai/kimi-k2.5":                          ["jarvis","research","legal","revenue","sales","growth"],
+            "moonshotai/kimi-k2-instruct":                   ["jarvis","code","product","systems"],
+            "moonshotai/kimi-k2-thinking":                   ["research","legal"],
+            "qwen/qwen3-coder-480b-a35b-instruct":           ["code","product","systems"],
+            "qwen/qwen3.5-397b-a17b":                        ["jarvis","research","legal","revenue","sales","growth"],
+            "qwen/qwen3.5-122b-a10b":                        ["jarvis","sales","voice"],
+            "meta/llama-4-maverick-17b-128e-instruct":       ["jarvis","sales","growth","product","systems","voice"],
+            "meta/llama-3.3-70b-instruct":                   ["jarvis","revenue","sales","systems","voice"],
+            "meta/llama-3.1-8b-instruct":                    ["voice","systems"],
+            "nvidia/llama-3.3-nemotron-super-49b-v1":        ["jarvis","research","revenue","legal"],
+            "nvidia/llama-3.1-nemotron-ultra-253b-v1":       ["research","legal","revenue"],
+            "mistralai/mistral-large-3-675b-instruct-2512":  ["jarvis","research","legal","revenue","sales"],
+            "deepseek-ai/deepseek-v3.2":                     ["research","revenue","growth"],
+            "mistralai/devstral-2-123b-instruct-2512":       ["code","systems"],
+            "qwen/qwen2.5-coder-32b-instruct":               ["code","systems"],
+            # Anthropic
+            "claude-opus-4-6":                               ["research","legal","revenue","jarvis"],
+            "claude-opus-4-5":                               ["research","legal","revenue","jarvis"],
+            "claude-sonnet-4-6":                             ["jarvis","research","revenue","sales","growth","product","legal"],
+            "claude-sonnet-4-5":                             ["jarvis","research","revenue","sales","product"],
+            "claude-haiku-4-5-20251001":                     ["voice","sales","jarvis"],
+            # OpenAI
+            "gpt-4.1":                                       ["jarvis","research","revenue","sales","growth","product"],
+            "gpt-4.1-mini":                                  ["jarvis","sales","growth","voice"],
+            "gpt-4.1-nano":                                  ["voice","sales"],
+            "gpt-4o":                                        ["jarvis","research","revenue","product"],
+            "gpt-4o-mini":                                   ["jarvis","sales","voice"],
+            "gpt-5":                                         ["jarvis","research","legal","revenue"],
+            "gpt-5.4-2026-03-05":                            ["jarvis","research","legal","revenue","product"],
+            "o1":                                            ["research","legal","revenue"],
+            "o3":                                            ["research","legal","revenue"],
+            "o3-mini":                                       ["research","legal","code"],
+            "o4-mini":                                       ["code","systems","product"],
+            "codex-mini-latest":                             ["code","systems"],
+        }
+        model_roles: dict = {
+            m: [{"role": r, "rank": i+1, "description": ""} for i, r in enumerate(roles)]
+            for m, roles in GOOD_FOR_MAP.items()
+        }
 
         # Get historical latency from model_health table
         history = {}
