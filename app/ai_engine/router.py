@@ -1,35 +1,18 @@
 import os
 import traceback
-
 from database import SessionLocal
 from models import ProviderHealth
-
 from ai_engine.providers.openai_provider import OpenAIProvider
 from ai_engine.providers.nvidia_provider import NvidiaProvider
+from ai_engine.providers.anthropic_provider import AnthropicProvider
 
-
-# ==========================================
-# ROUTING POLICY CONFIG
-# ==========================================
-
-PREFERRED_PROVIDER = os.getenv("PREFERRED_PROVIDER", "nvidia")
+PREFERRED_PROVIDER   = os.getenv("PREFERRED_PROVIDER", "nvidia")
 MIN_HEALTH_THRESHOLD = float(os.getenv("MIN_HEALTH_THRESHOLD", "0.60"))
+FORCE_FREE_MODE      = os.getenv("FORCE_FREE_MODE", "false").lower() == "true"
 
-# Hard override: Never use paid provider
-FORCE_FREE_MODE = os.getenv("FORCE_FREE_MODE", "false").lower() == "true"
-
-
-# ==========================================
-# PROVIDER REGISTRY
-# ==========================================
-
-openai_provider = OpenAIProvider()
-nvidia_provider = NvidiaProvider()
-
-
-# ==========================================
-# ROUTER INITIALIZATION LOG
-# ==========================================
+openai_provider    = OpenAIProvider()
+nvidia_provider    = NvidiaProvider()
+anthropic_provider = AnthropicProvider()
 
 print("ROUTER MODULE LOADED")
 print("ROUTER POLICY → Preferred:", PREFERRED_PROVIDER)
@@ -37,173 +20,96 @@ print("ROUTER POLICY → Min Health Threshold:", MIN_HEALTH_THRESHOLD)
 print("ROUTER POLICY → Force Free Mode:", FORCE_FREE_MODE)
 
 
-# ==========================================
-# PROVIDER HEALTH LOOKUP
-# ==========================================
-
 def get_provider_health(provider_name: str):
-    # Fast health: "configured == healthy"
     if provider_name == "nvidia":
-        return 1.0 if bool(os.getenv("MOONSHOT_API_KEY")) else 0.0
-
+        return 1.0 if bool(os.getenv("MOONSHOT_API_KEY") or os.getenv("NVIDIA_API_KEY")) else 0.0
     if provider_name == "openai":
         return 1.0 if bool(os.getenv("OPENAI_API_KEY")) else 0.0
-
+    if provider_name == "anthropic":
+        return 1.0 if bool(os.getenv("ANTHROPIC_API_KEY")) else 0.0
     return 0.0
 
-# ==========================================
-# PROVIDER SELECTION LOGIC
-# ==========================================
 
-def choose_primary_provider(model: str):
+def detect_provider(model: str) -> tuple:
+    """Returns (provider_name, clean_model_id)"""
+    if not isinstance(model, str):
+        return ("nvidia", model)
 
-    health_map = {
-        "openai": get_provider_health("openai"),
-        "nvidia": get_provider_health("nvidia"),
-    }
+    # Explicit prefix
+    if model.startswith("anthropic/") or model.startswith("claude-"):
+        return ("anthropic", model.replace("anthropic/", ""))
 
-    print("ROUTER HEALTH MAP:", health_map)
+    if model.startswith("openai/"):
+        return ("openai", model.split("/", 1)[1])
 
-    # ----------------------------------
-    # HARD OVERRIDE: FORCE FREE MODE
-    # ----------------------------------
+    if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3") or model.startswith("codex"):
+        return ("openai", model)
 
-    if FORCE_FREE_MODE:
-        print("ROUTER POLICY: FORCE_FREE_MODE active → Using nvidia only")
-        return "nvidia"
+    if model.startswith("nvidia-nim/"):
+        return ("nvidia", model[len("nvidia-nim/"):])
 
-    # ----------------------------------
-    # Preferred provider logic
-    # ----------------------------------
+    # vendor/model slug → NVIDIA NIM
+    if "/" in model:
+        return ("nvidia", model)
 
-    preferred_health = health_map.get(PREFERRED_PROVIDER, 1.0)
+    return ("nvidia", model)
 
-    if preferred_health >= MIN_HEALTH_THRESHOLD:
-        print("ROUTER POLICY: Preferred provider healthy:", PREFERRED_PROVIDER)
-        return PREFERRED_PROVIDER
-
-    # ----------------------------------
-    # Fallback to healthiest
-    # ----------------------------------
-
-    sorted_providers = sorted(
-        health_map.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    selected = sorted_providers[0][0]
-
-    print("ROUTER POLICY: Preferred below threshold. Healthiest:", selected)
-
-    return selected
-
-
-# ==========================================
-# MODEL ROUTING WITH POLICY + FALLBACK
-# ==========================================
 
 def run_model(model: str, messages: list, timeout: int = 120):
-
     print("RUN_MODEL CALLED WITH:", model)
 
-    # --------------------------------------------------------------
-    # AUTHORITATIVE MODEL-ID ROUTING (prevents OpenAI invalid model)
-    # --------------------------------------------------------------
-    forced_primary = None
+    provider_name, clean_model = detect_provider(model)
+    print("ROUTER: Detected provider:", provider_name, "model:", clean_model)
 
-    # Normalize OpenClaw prefix if present
-    if isinstance(model, str) and model.startswith("nvidia-nim/"):
-        model = model[len("nvidia-nim/"):]
+    health_map = {
+        "openai":    get_provider_health("openai"),
+        "nvidia":    get_provider_health("nvidia"),
+        "anthropic": get_provider_health("anthropic"),
+    }
+    print("ROUTER HEALTH MAP:", health_map)
 
-    # If expressed as openai/gpt-*, strip prefix and force OpenAI
-    if isinstance(model, str) and model.startswith("openai/"):
-        forced_primary = "openai"
-        model = model.split("/", 1)[1]
+    provider_map = {
+        "nvidia":    nvidia_provider,
+        "openai":    openai_provider,
+        "anthropic": anthropic_provider,
+    }
 
-    # If plain OpenAI id (gpt-*) force OpenAI
-    elif isinstance(model, str) and model.startswith("gpt-"):
-        forced_primary = "openai"
+    # Fallback chain per provider
+    fallback_chain = {
+        "nvidia":    [("openai",    "gpt-4.1"),
+                      ("anthropic", "claude-sonnet-4-5")],
+        "openai":    [("nvidia",    "moonshotai/kimi-k2.5"),
+                      ("anthropic", "claude-sonnet-4-5")],
+        "anthropic": [("nvidia",    "moonshotai/kimi-k2.5"),
+                      ("openai",    "gpt-4.1")],
+    }
 
-    # Any other vendor/model with a slash goes to NVIDIA NIM
-    # (qwen/..., moonshotai/..., z-ai/..., google/...)
-    elif isinstance(model, str) and "/" in model:
-        forced_primary = "nvidia"
-    # --------------------------------------------------------------
+    if FORCE_FREE_MODE:
+        provider_name = "nvidia"
+        print("ROUTER POLICY: FORCE_FREE_MODE active → Using nvidia only")
 
-    # Policy-based selection (kept intact)
-    selected_primary = choose_primary_provider(model)
-
-    # Override policy selection when model-id routing requires it
-    if forced_primary is not None:
-        selected_primary = forced_primary
-
-    if selected_primary == "nvidia":
-        primary_provider = nvidia_provider
-        fallback_provider = openai_provider
-        fallback_model = "gpt-4o"
-        print("ROUTER: Using NVIDIA Provider (Primary)")
-
-    else:
-        primary_provider = openai_provider
-        fallback_provider = nvidia_provider
-        fallback_model = "moonshotai/kimi-k2.5"
-        print("ROUTER: Using OpenAI Provider (Primary)")
-
-    # ----------------------------------
-    # Attempt Primary Execution
-    # ----------------------------------
+    primary = provider_map[provider_name]
 
     try:
-        return primary_provider.run(
-            model=model,
-            messages=messages,
-            timeout=timeout
-        )
-
+        result = primary.run(model=clean_model, messages=messages, timeout=timeout)
+        result["provider"] = provider_name
+        return result
     except Exception as primary_error:
-
-        print("========== PRIMARY PROVIDER FAILED ==========")
-        print("MODEL:", model)
-        print("ERROR TYPE:", type(primary_error).__name__)
-        print("ERROR MESSAGE:", str(primary_error))
-        print("TRACEBACK:")
-        traceback.print_exc()
-        print("=============================================")
-
-        # ----------------------------------
-        # FORCE_FREE_MODE blocks paid fallback
-        # ----------------------------------
-
+        print(f"PRIMARY PROVIDER ({provider_name}) FAILED: {primary_error}")
         if FORCE_FREE_MODE:
-            print("ROUTER POLICY: FORCE_FREE_MODE prevents fallback to OpenAI")
             raise primary_error
 
-        # ----------------------------------
-        # Attempt Fallback Provider
-        # ----------------------------------
+        for fallback_provider_name, fallback_model in fallback_chain.get(provider_name, []):
+            if health_map.get(fallback_provider_name, 0) < MIN_HEALTH_THRESHOLD:
+                continue
+            try:
+                print(f"Attempting fallback: {fallback_provider_name}/{fallback_model}")
+                fallback = provider_map[fallback_provider_name]
+                result = fallback.run(model=fallback_model, messages=messages, timeout=timeout)
+                result["provider"] = fallback_provider_name
+                return result
+            except Exception as fe:
+                print(f"Fallback {fallback_provider_name} failed: {fe}")
+                continue
 
-        try:
-            print("Attempting Fallback Provider:", fallback_model)
-
-            return fallback_provider.run(
-                model=fallback_model,
-                messages=messages,
-                timeout=timeout
-            )
-
-        except Exception as fallback_error:
-
-            print("========== FALLBACK PROVIDER FAILED ==========")
-            print("FALLBACK MODEL:", fallback_model)
-            print("ERROR TYPE:", type(fallback_error).__name__)
-            print("ERROR MESSAGE:", str(fallback_error))
-            print("TRACEBACK:")
-            traceback.print_exc()
-            print("==============================================")
-
-            raise Exception(
-                f"Primary and fallback providers failed.\n"
-                f"Primary error: {primary_error}\n"
-                f"Fallback error: {fallback_error}"
-            )
+        raise Exception(f"All providers failed. Primary: {primary_error}")

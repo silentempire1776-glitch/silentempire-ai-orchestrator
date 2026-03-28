@@ -330,7 +330,12 @@ def process_job(job_id):
             )
 
         # Provider is determined by model prefix
-        provider_name = "openai" if (model_name.startswith("gpt") or model_name.startswith("openai/")) else "nvidia"
+        if model_name.startswith("claude") or model_name.startswith("anthropic/"):
+            provider_name = "anthropic"
+        elif model_name.startswith("gpt") or model_name.startswith("openai/") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4") or model_name.startswith("codex"):
+            provider_name = "openai"
+        else:
+            provider_name = "nvidia"
 
         # Normalize OpenAI model ids for pricing + provider call
         # pricing table stores "gpt-4o" not "openai/gpt-4o"
@@ -390,7 +395,7 @@ def process_job(job_id):
             if _ti or _to:
                 _req.post(f"{_api}/metrics/llm/record", json={
                     "agent": _agent, "model": _mod,
-                    "provider": job.provider or "nvidia",
+                    "provider": job.provider or provider_name or "nvidia",
                     "tokens_in": _ti, "tokens_out": _to,
                     "tokens_total": _ti + _to,
                     "cost_usd": float(actual_cost or 0),

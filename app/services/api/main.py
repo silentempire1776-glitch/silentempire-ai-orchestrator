@@ -1418,13 +1418,31 @@ def get_models_summary():
         assignments  = benchmark.get("assignments", {})
         role_configs = benchmark.get("role_configs", {})
 
-        # Build role fit map: model -> list of roles it's assigned to
+        # Build role fit map from ACTUAL .env assignments (not benchmark report)
+        ENV_ROLE_MAP = {
+            "MODEL_JARVIS_ORCHESTRATOR": "jarvis",
+            "MODEL_RESEARCH":            "research",
+            "MODEL_FINANCIAL_STRATEGY":  "revenue",
+            "MODEL_MARKETING":           "sales",
+            "MODEL_STRATEGIC_PLANNING":  "growth",
+            "MODEL_CODING":              "product",
+            "MODEL_LEGAL_STRUCTURING":   "legal",
+            "MODEL_SYSTEMS":             "systems",
+            "MODEL_MICRO_CODING":        "code",
+            "MODEL_FAST_WORKER":         "voice",
+        }
         role_fit: dict = {}
-        for role, info in assignments.items():
-            m = info.get("model", "")
-            if m not in role_fit:
-                role_fit[m] = []
-            role_fit[m].append(role)
+        for env_var, role in ENV_ROLE_MAP.items():
+            m = os.getenv(env_var, "")
+            if not m:
+                # fallback to benchmark report
+                for r, info in assignments.items():
+                    if r == role:
+                        m = info.get("model", "")
+            if m:
+                if m not in role_fit:
+                    role_fit[m] = []
+                role_fit[m].append(role)
 
         # Build model priority map: model -> roles where it appears in priority list
         model_roles: dict = {}
@@ -1504,3 +1522,201 @@ def get_models_summary():
         return {"models": [], "error": str(e)}
     finally:
         db.close()
+
+
+# ── CST/CDT TIMEZONE HELPERS ──────────────────────────────────
+def _cst_midnight_today():
+    import datetime as _dt
+    now_utc = _dt.datetime.utcnow()
+    month = now_utc.month
+    is_cdt = 3 <= month <= 11
+    offset_hours = 5 if is_cdt else 6
+    now_local = now_utc - _dt.timedelta(hours=offset_hours)
+    midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight_local + _dt.timedelta(hours=offset_hours)
+
+def _cst_midnight_yesterday():
+    import datetime as _dt
+    return _cst_midnight_today() - _dt.timedelta(days=1)
+
+
+# ── /metrics/llm/summary ──────────────────────────────────────
+@app.get("/metrics/llm/summary")
+def get_llm_summary():
+    """Token counts for today/yesterday/month with correct CST midnight boundaries."""
+    from sqlalchemy import text
+    from datetime import timedelta
+    db = SessionLocal()
+    try:
+        today_start     = _cst_midnight_today()
+        yesterday_start = _cst_midnight_yesterday()
+        month_start     = today_start.replace(day=1)
+
+        def tok(since, until=None):
+            try:
+                if until:
+                    r = db.execute(text(
+                        "SELECT COALESCE(SUM(tokens_total),0), COALESCE(SUM(cost_usd),0)"
+                        " FROM mcp_llm_calls WHERE created_at >= :s AND created_at < :u"
+                    ), {"s": since, "u": until}).fetchone()
+                else:
+                    r = db.execute(text(
+                        "SELECT COALESCE(SUM(tokens_total),0), COALESCE(SUM(cost_usd),0)"
+                        " FROM mcp_llm_calls WHERE created_at >= :s"
+                    ), {"s": since}).fetchone()
+                return {"tokens": int(r[0] or 0), "cost": float(r[1] or 0)}
+            except Exception as e:
+                print("[llm/summary] tok error:", e)
+                return {"tokens": 0, "cost": 0}
+
+        today     = tok(today_start)
+        yesterday = tok(yesterday_start, today_start)
+        month     = tok(month_start)
+
+        def by_group(since, until=None, grp="agent"):
+            try:
+                if until:
+                    rows = db.execute(text(
+                        f"SELECT {grp}, COALESCE(SUM(tokens_total),0) as tt"
+                        f" FROM mcp_llm_calls WHERE created_at >= :s AND created_at < :u GROUP BY {grp} ORDER BY tt DESC"
+                    ), {"s": since, "u": until}).fetchall()
+                else:
+                    rows = db.execute(text(
+                        f"SELECT {grp}, COALESCE(SUM(tokens_total),0) as tt"
+                        f" FROM mcp_llm_calls WHERE created_at >= :s GROUP BY {grp} ORDER BY tt DESC"
+                    ), {"s": since}).fetchall()
+                return {r[0]: {"tokens_total": int(r[1])} for r in rows if r[0]}
+            except Exception:
+                return {}
+
+        # Save daily snapshot
+        try:
+            import json as _j
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS token_daily_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    snapshot_date DATE NOT NULL,
+                    tokens_total BIGINT DEFAULT 0,
+                    cost_usd DECIMAL(12,6) DEFAULT 0,
+                    by_agent JSONB DEFAULT '{}'::jsonb,
+                    by_model JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(snapshot_date)
+                )
+            """))
+            by_agent_snap = by_group(today_start)
+            by_model_snap = by_group(today_start, grp="model")
+            db.execute(text("""
+                INSERT INTO token_daily_snapshots (snapshot_date, tokens_total, cost_usd, by_agent, by_model)
+                VALUES (:d, :t, :c, :a::jsonb, :m::jsonb)
+                ON CONFLICT (snapshot_date) DO UPDATE SET
+                    tokens_total = :t, cost_usd = :c, by_agent = :a::jsonb, by_model = :m::jsonb
+            """), {
+                "d": today_start.date(),
+                "t": today["tokens"], "c": today["cost"],
+                "a": _j.dumps(by_agent_snap), "m": _j.dumps(by_model_snap),
+            })
+            db.commit()
+        except Exception as snap_e:
+            print("[llm/summary] snapshot error:", snap_e)
+
+        return {
+            "today":              today,
+            "yesterday":          yesterday,
+            "month":              month,
+            "by_agent_today":     by_group(today_start),
+            "by_agent_yesterday": by_group(yesterday_start, today_start),
+            "by_model_today":     by_group(today_start,     grp="model"),
+            "by_model_yesterday": by_group(yesterday_start, today_start, grp="model"),
+            "by_model_week":      by_group(today_start - timedelta(days=7), grp="model"),
+        }
+    except Exception as e:
+        return {"error": str(e), "today": {"tokens":0,"cost":0}, "yesterday": {"tokens":0,"cost":0}, "month": {"tokens":0,"cost":0}}
+    finally:
+        db.close()
+
+
+# ── /files/download-zip ───────────────────────────────────────
+@app.get("/files/download-zip")
+def download_folder_zip(path: str = ""):
+    import zipfile, io, os
+    from fastapi.responses import StreamingResponse
+    root = "/ai-firm"
+    folder = os.path.join(root, path.lstrip("/")) if path else root
+    if not os.path.exists(folder):
+        raise HTTPException(404, "Folder not found")
+    if not os.path.isdir(folder):
+        raise HTTPException(400, "Not a folder")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, dirnames, filenames in os.walk(folder):
+            dirnames[:] = [d for d in dirnames if d not in [".git","node_modules","__pycache__",".next"]]
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                arcname  = os.path.relpath(filepath, folder)
+                try:
+                    zf.write(filepath, arcname)
+                except Exception:
+                    pass
+    buf.seek(0)
+    folder_name = os.path.basename(folder) or "silentempire"
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={folder_name}.zip"})
+
+
+# ── /metrics/billing/actual ───────────────────────────────────
+@app.get("/metrics/billing/actual")
+def get_actual_billing():
+    """Real billed costs from OpenAI org API + calculated costs for Anthropic/NVIDIA."""
+    import urllib.request as _urllib
+    import json as _json2
+    from datetime import datetime, timedelta
+    from sqlalchemy import text
+    result = {"openai": None, "anthropic": None, "nvidia": None, "errors": []}
+
+    # OpenAI — real billed cost from org API
+    openai_org_key = os.getenv("OPENAI_ORG_API_KEY", "").strip()
+    if openai_org_key:
+        try:
+            now        = int(datetime.utcnow().timestamp())
+            month_start = int(datetime.utcnow().replace(day=1,hour=0,minute=0,second=0).timestamp())
+            _url = f"https://api.openai.com/v1/organization/costs?start_time={month_start}&end_time={now}&interval=1d"
+            _req = _urllib.Request(_url, headers={"Authorization": f"Bearer {openai_org_key}"})
+            with _urllib.urlopen(_req, timeout=15) as _resp:
+                d = _json2.loads(_resp.read())
+            items = d.get("data", [])
+            total_cents = sum(item.get("amount", {}).get("value", 0) for item in items)
+            result["openai"] = {
+                "month_cost_usd": round(total_cents / 100, 6),
+                "source": "openai_org_api_actual",
+                "line_items": len(items),
+            }
+        except Exception as e:
+            result["errors"].append(f"OpenAI: {str(e)[:100]}")
+
+    # Anthropic — calculated from tokens × pricing
+    db = SessionLocal()
+    try:
+        month_start_dt = datetime.utcnow().replace(day=1,hour=0,minute=0,second=0,microsecond=0)
+        rows = db.execute(text(
+            "SELECT model, SUM(tokens_in) as ti, SUM(tokens_out) as to_, SUM(tokens_total) as tt, SUM(cost_usd) as cost"
+            " FROM mcp_llm_calls WHERE provider = 'anthropic' AND created_at >= :s GROUP BY model"
+        ), {"s": month_start_dt}).fetchall()
+        total_cost = sum(float(r[4] or 0) for r in rows)
+        result["anthropic"] = {
+            "month_cost_usd": round(total_cost, 6),
+            "source": "calculated_from_tokens_x_pricing",
+            "by_model": [{"model": r[0], "tokens": int(r[2] or 0), "cost_usd": round(float(r[4] or 0), 6)} for r in rows],
+        }
+
+        # NVIDIA free
+        nv = db.execute(text(
+            "SELECT COALESCE(SUM(tokens_total),0) FROM mcp_llm_calls WHERE provider = 'nvidia' AND created_at >= :s"
+        ), {"s": month_start_dt}).fetchone()
+        result["nvidia"] = {"month_cost_usd": 0.0, "month_tokens": int(nv[0] or 0), "source": "free_tier"}
+    except Exception as e:
+        result["errors"].append(f"DB: {str(e)[:100]}")
+    finally:
+        db.close()
+
+    return result

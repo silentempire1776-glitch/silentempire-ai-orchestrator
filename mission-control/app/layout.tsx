@@ -10,6 +10,7 @@ const navItems = [
   { href: "/agents", label: "Agents", icon: "◈" },
   { href: "/console", label: "Console", icon: "⌘" },
   { href: "/files", label: "Files", icon: "◻" },
+  { href: "/models", label: "Models", icon: "◈" },
 ]
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -36,6 +36,7 @@ import json
 import time
 import hashlib
 import os
+import re
 import requests
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -279,6 +280,8 @@ def _fetch_live_data() -> str:
             states = r2.json().get("states", {})
             # All known agents - show even if no recent events
             all_agents = ["jarvis","research","revenue","sales","growth","product","legal","systems","code","voice"]
+            jarvis_model = os.getenv("MODEL_JARVIS_ORCHESTRATOR", "moonshotai/kimi-k2.5")
+            lines.append(f"=== JARVIS CURRENT MODEL: {jarvis_model} ===")
             lines.append("=== AGENT STATES ===")
             for ag in all_agents:
                 st = states.get(ag, "idle")
@@ -425,7 +428,7 @@ def call_llm_jarvis(prompt: str) -> str:
                     "temperature": 0.4,
                     "max_tokens": 1024,
                 }
-                r = requests.post(url, headers=headers, json=payload, timeout=10)
+                r = requests.post(url, headers=headers, json=payload, timeout=(5, 15))
                 r.raise_for_status()
                 data = r.json()
                 msg = data["choices"][0]["message"]
@@ -467,7 +470,7 @@ def call_llm_jarvis(prompt: str) -> str:
                 "Content-Type": "application/json",
             }
             payload = {
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1",
                 "messages": [
                     {"role": "system", "content": _build_jarvis_prompt()},
                     {"role": "user", "content": prompt},
@@ -972,6 +975,89 @@ def run() -> None:
             continue
 
         dispatch(next_agent, task_type, payload, doctrine, chain_id)
+
+
+
+
+# ==================================================
+# PROACTIVE JARVIS MESSAGING
+# Sends status updates to active chat sessions autonomously
+# ==================================================
+import threading as _threading
+
+def _jarvis_proactive_loop():
+    """Background thread: posts status updates to chat every 10 minutes."""
+    import time as _time
+    _time.sleep(120)  # Wait 2 min after startup before first message
+    while True:
+        try:
+            _time.sleep(600)  # Every 10 minutes
+            _send_proactive_update()
+        except Exception as _pe:
+            print(f"[PROACTIVE] Error: {_pe}")
+
+def _send_proactive_update():
+    """Generate and post a proactive status update to the most recent chat session."""
+    try:
+        # Get most recent active session
+        sess_r = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
+        if not sess_r.ok:
+            return
+        sessions = sess_r.json()
+        if not sessions:
+            return
+        # Use most recently updated session
+        session = sessions[0]
+        session_id = session.get("id")
+        if not session_id:
+            return
+
+        # Build a proactive status message
+        live = _fetch_live_data()
+        prompt = f"""You are Jarvis. Generate a brief proactive status update (3-5 sentences max).
+Based on this live data:
+{live}
+
+Report on:
+- Any agents that are working
+- Token usage highlights
+- Any notable activity
+- A recommended next action for the Founder
+
+Be direct and concise. No headers. No bullet points. Just a natural status update as if you are checking in."""
+
+        reply = call_llm_jarvis(prompt)
+        if not reply or len(reply) < 20:
+            return
+
+        # Post to the session as a Jarvis message
+        session_data = requests.get(f"{API_BASE_URL}/sessions/{session_id}", timeout=5)
+        if not session_data.ok:
+            return
+        existing = session_data.json()
+        messages = existing.get("messages", [])
+
+        import uuid as _uuid2
+        new_msg = {
+            "id": str(_uuid2.uuid4())[:8],
+            "role": "jarvis",
+            "content": f"**[Status Update]** {reply}",
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+            "mode": "jarvis",
+        }
+        messages.append(new_msg)
+
+        requests.put(f"{API_BASE_URL}/sessions/{session_id}",
+            json={"messages": messages}, timeout=5)
+        print(f"[PROACTIVE] Status update sent to session {session_id[:8]}")
+
+    except Exception as e:
+        print(f"[PROACTIVE] Send error: {e}")
+
+# Start proactive thread
+_proactive_thread = _threading.Thread(target=_jarvis_proactive_loop, daemon=True)
+_proactive_thread.start()
+print("[PROACTIVE] Proactive messaging thread started (updates every 10 min)")
 
 
 if __name__ == "__main__":
