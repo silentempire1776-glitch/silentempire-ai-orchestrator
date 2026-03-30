@@ -1,23 +1,38 @@
-# Data and volumes
-data/
-*.log
-*.pyc
-__pycache__/
+# ========================
+# ENV / SECRETS
+# ========================
 .env
+*.key
+*.pem
+secrets/
 
-# Node
+# ========================
+# RUNTIME DATA (DO NOT TRACK)
+# ========================
+data/
+logs/
+backups/
+*.db
+
+# ========================
+# PYTHON
+# ========================
+__pycache__/
+*.pyc
+
+# ========================
+# NODE / FRONTEND
+# ========================
 node_modules/
 .next/
 .turbo/
 dist/
 build/
 
-# Backups
+# ========================
+# SYSTEM / TEMP
+# ========================
+*.log
 *.bak*
 *.save
-*.bak
-
-# Secrets
-*.key
-*.pem
-secrets/
+.DS_Store
