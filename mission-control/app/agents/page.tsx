@@ -282,7 +282,7 @@ export default function AgentsPage() {
           Object.entries(states).forEach(([agent, state]) => {
             if (state === "working") {
               const key = `working-${agent}-${Math.floor(Date.now()/8000)}`
-              entries.push({ id: key, time: timeStr, who: agent, type: "agent", msg: `⚡ ${agent} is working — ${(SERVER_DEFAULTS[agent]||"").split("/").pop()}` })
+              entries.push({ id: key, time: timeStr, who: agent, type: "agent", msg: `⚡ ${agent} is working — ${(overrides[agent]||SERVER_DEFAULTS[agent]||"").split("/").pop()}` })
             }
           })
         }

@@ -376,6 +376,31 @@ def _build_jarvis_prompt() -> str:
 
     mem_section = f"\n--- MEMORY ---\n{memory[:600]}\n---" if memory else ""
     session_section = f"\n--- SESSION ---\n{session_state}\n---" if session_state else ""
+    # Fetch recent conversation history from chat sessions API
+    conv_section = ""
+    try:
+        import requests as _creq, os as _cos
+        _api = _cos.getenv("API_BASE_URL", "http://api:8000").rstrip("/")
+        _sr = _creq.get(f"{_api}/sessions", timeout=3)
+        if _sr.ok:
+            _resp_json = _sr.json()
+            _sessions = _resp_json.get("sessions", _resp_json) if isinstance(_resp_json, dict) else _resp_json
+            if _sessions:
+                _sid = _sessions[0].get("id")
+                if _sid:
+                    _mr = _creq.get(f"{_api}/sessions/{_sid}", timeout=3)
+                    if _mr.ok:
+                        _msgs = _mr.json().get("messages", [])
+                        _recent = [m for m in _msgs if m.get("role") in ("user","assistant")][-16:]
+                        if _recent:
+                            _lines = []
+                            for _m in _recent:
+                                _role = "Curtis" if _m["role"] == "user" else "Jarvis"
+                                _text = str(_m.get("content",""))[:300]
+                                _lines.append(f"{_role}: {_text}")
+                            conv_section = "\n--- RECENT CONVERSATION ---\n" + "\n".join(_lines) + "\n---"
+    except Exception:
+        pass
 
     # ── TIER 1: Full doctrine for reasoning/large models ──────────
     if tier == 1:
@@ -410,6 +435,7 @@ Current time: {now}
 ---
 {mem_section}
 {session_section}
+{conv_section}
 """
 
     # ── TIER 2: Balanced prompt for strong general models ─────────
@@ -430,11 +456,16 @@ Current time: {now}
 5. Escalate ONLY for: legal exposure, external spend, irreversible public action
 
 ## TOOLS — USE THESE EXACT COMMANDS
-Web search (default): [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
+Web search: [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
 Perplexity (when asked): [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "query"[/EXEC]
+ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
 ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
-ClickUp all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment text"[/EXEC]
+ClickUp get comments: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py get-comments TASK_ID[/EXEC]
+ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
+ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
 Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
+Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
 Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
 
 ## SMART DISPATCH — SELECT 1-3 AGENTS ONLY
@@ -465,6 +496,7 @@ Current time: {now}
 ---
 {mem_section}
 {session_section}
+{conv_section}
 """
 
     # ── TIER 3: Lean imperative for fast/small models ─────────────
@@ -479,7 +511,13 @@ RULES:
 
 TOOLS:
 Search: [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
-ClickUp: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
+ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment text"[/EXEC]
+ClickUp get comments: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py get-comments TASK_ID[/EXEC]
+ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
+ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
+Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
 File: [EXEC:bash]cat /ai-firm/data/reports/AGENT/file.md[/EXEC]
 Agent: [DISPATCH:name]instruction with save path[/DISPATCH]
 
