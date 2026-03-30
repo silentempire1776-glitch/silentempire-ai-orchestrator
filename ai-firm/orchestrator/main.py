@@ -280,8 +280,33 @@ def _fetch_live_data() -> str:
             states = r2.json().get("states", {})
             # All known agents - show even if no recent events
             all_agents = ["jarvis","research","revenue","sales","growth","product","legal","systems","code","voice"]
-            jarvis_model = os.getenv("MODEL_JARVIS_ORCHESTRATOR", "moonshotai/kimi-k2.5")
+            jarvis_model = _get_active_jarvis_model()
             lines.append(f"=== JARVIS CURRENT MODEL: {jarvis_model} ===")
+            # Show all agent models (from Redis overrides + env defaults)
+            try:
+                import redis as _rlive
+                _rlr = _rlive.from_url(
+                    os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                    decode_responses=True
+                )
+                _agent_defaults = {
+                    "research": os.getenv("MODEL_RESEARCH",           "moonshotai/kimi-k2-thinking"),
+                    "revenue":  os.getenv("MODEL_FINANCIAL_STRATEGY", "moonshotai/kimi-k2.5"),
+                    "sales":    os.getenv("MODEL_MARKETING",          "moonshotai/kimi-k2.5"),
+                    "growth":   os.getenv("MODEL_STRATEGIC_PLANNING", "moonshotai/kimi-k2.5"),
+                    "product":  os.getenv("MODEL_CODING",             "moonshotai/kimi-k2-instruct"),
+                    "legal":    os.getenv("MODEL_LEGAL_STRUCTURING",  "moonshotai/kimi-k2-thinking"),
+                    "systems":  os.getenv("MODEL_SYSTEMS",            "qwen/qwen3-coder-480b-a35b-instruct"),
+                    "code":     os.getenv("MODEL_MICRO_CODING",       "qwen/qwen3-coder-480b-a35b-instruct"),
+                    "voice":    os.getenv("MODEL_FAST_WORKER",        "meta/llama-4-maverick-17b-128e-instruct"),
+                }
+                lines.append("=== AGENT MODELS ===")
+                for _ag, _default in _agent_defaults.items():
+                    _ov = _rlr.get(f"agent:model_override:{_ag}")
+                    _m = (_ov.strip() if _ov and _ov.strip() else _default).split("/")[-1]
+                    lines.append(f"  {_ag}: {_m}{'  [override]' if _ov and _ov.strip() else ''}")
+            except Exception:
+                pass
             lines.append("=== AGENT STATES ===")
             for ag in all_agents:
                 st = states.get(ag, "idle")
@@ -304,38 +329,169 @@ def _fetch_live_data() -> str:
         lines.append("=== TOKEN USAGE: (unavailable) ===")
     return "\n".join(lines)
 
+def _get_model_tier(model_name: str) -> int:
+    """Return prompt complexity tier for a given model."""
+    tiers = {
+        "claude-sonnet-4-6": 1, "claude-opus-4-6": 1, "claude-haiku-4-5": 2,
+        "kimi-k2-thinking": 1, "kimi-k2-thinking": 1,
+        "deepseek-v3.2": 1, "deepseek": 1,
+        "nemotron-super": 1, "nemotron": 1,
+        "qwen3.5-397b": 1, "397b": 1,
+        "kimi-k2.5": 2, "kimi-k2-instruct": 2,
+        "gpt-4.1": 2, "gpt-4o": 2, "mistral-large": 2,
+        "qwen3-coder": 2, "qwen3": 2,
+        "llama-4-maverick": 3, "llama-3.3-70b": 3, "llama-3.1-8b": 3,
+        "maverick": 3, "70b": 3, "8b": 3,
+    }
+    model_lower = model_name.lower()
+    for key, tier in tiers.items():
+        if key in model_lower:
+            return tier
+    return 2  # default to balanced
+
+
 def _build_jarvis_prompt() -> str:
+    """Build model-optimized system prompt based on active model tier."""
     from datetime import datetime as _dt
-    d = os.path.dirname(os.path.abspath(__file__))
-    soul      = _load_doc(os.path.join(d, "SOUL.md"))
-    identity  = _load_doc(os.path.join(d, "IDENTITY.md"))
-    heartbeat = _load_doc(os.path.join(d, "HEARTBEAT.md"))
-    live      = _fetch_live_data()
-    memory    = _read_jarvis_memory()
-    mem_section = f"\n--- JARVIS MEMORY (persistent across sessions) ---\n{memory}\n---" if memory else ""
-    return f"""You are Jarvis — sovereign command intelligence of Silent Empire AI.
+    import os as _os
 
+    d = _os.path.dirname(_os.path.abspath(__file__))
+    active_model = _os.getenv("MODEL_JARVIS_ORCHESTRATOR", "moonshotai/kimi-k2.5")
+    tier = _get_model_tier(active_model)
+
+    # Always load these
+    live   = _fetch_live_data()
+    memory = _read_jarvis_memory()
+    now    = _dt.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    # Session state (from persistent memory)
+    session_state = ""
+    try:
+        ss_path = "/ai-firm/data/memory/jarvis/SESSION-STATE.md"
+        if _os.path.exists(ss_path):
+            with open(ss_path) as _f:
+                session_state = _f.read()[:800]
+    except Exception:
+        pass
+
+    mem_section = f"\n--- MEMORY ---\n{memory[:600]}\n---" if memory else ""
+    session_section = f"\n--- SESSION ---\n{session_state}\n---" if session_state else ""
+
+    # ── TIER 1: Full doctrine for reasoning/large models ──────────
+    if tier == 1:
+        constitution     = _load_doc(_os.path.join(d, "CONSTITUTION.md"))
+        soul             = _load_doc(_os.path.join(d, "SOUL.md"))
+        identity         = _load_doc(_os.path.join(d, "IDENTITY.md"))
+        heartbeat        = _load_doc(_os.path.join(d, "HEARTBEAT.md"))
+        user             = _load_doc(_os.path.join(d, "USER.md"))
+        elite_council    = _load_doc(_os.path.join(d, "ELITE-COUNCIL.md"))
+        governance       = _load_doc(_os.path.join(d, "GOVERNANCE.md"))
+        revenue_playbook = _load_doc(_os.path.join(d, "REVENUE-PLAYBOOK.md"))
+        intelligence     = _load_doc(_os.path.join(d, "INTELLIGENCE.md"))
+
+        return f"""You are Jarvis — sovereign COO and command intelligence of Silent Empire AI.
+
+{constitution}
 {identity}
-
 {soul}
-
+{user}
 {heartbeat}
 
---- LIVE SYSTEM DATA (fetched right now — use ONLY this for data questions) ---
+--- STRATEGIC DOCTRINE (apply silently) ---
+{elite_council}
+{governance}
+{revenue_playbook}
+{intelligence}
+--- END DOCTRINE ---
+
+--- LIVE SYSTEM DATA ---
 {live}
-Current time: {_dt.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
+Current time: {now}
 ---
-
 {mem_section}
-
-RULES:
-1. ONLY use LIVE SYSTEM DATA above for token/agent/cost answers. Never invent numbers.
-2. If data shows zero or empty, say so honestly.
-3. You CANNOT send emails or notifications — not configured.
-4. Do not claim to have done things you have not done this session.
-5. You coordinate agents. Do not fabricate their outputs.
+{session_section}
 """
 
+    # ── TIER 2: Balanced prompt for strong general models ─────────
+    elif tier == 2:
+        return f"""You are Jarvis — autonomous COO of Silent Empire AI.
+
+## WHO YOU ARE
+- Sovereign command intelligence for Curtis Proske (Founder)
+- Mission: Build Silent Empire to $1K/day → $10K/day
+- Tone: Calm, intelligent, slightly British, light dry wit
+- Style: Artifact-first, zero theater, no narration
+
+## LAWS (follow exactly)
+1. Deliver results, not progress narration
+2. No ETAs, "starting now", or time theater
+3. Never fabricate — if EXEC fails, say so exactly
+4. Assumptions over stalling — mark assumptions clearly
+5. Escalate ONLY for: legal exposure, external spend, irreversible public action
+
+## TOOLS — USE THESE EXACT COMMANDS
+Web search (default): [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
+Perplexity (when asked): [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "query"[/EXEC]
+ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
+ClickUp all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
+Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
+
+## SMART DISPATCH — SELECT 1-3 AGENTS ONLY
+research → market research, data, reports
+revenue  → pricing, offers, monetization
+sales    → copy, scripts, conversion
+growth   → channels, funnels, marketing
+legal    → compliance, risk, contracts
+product  → roadmap, features, delivery
+code     → build tools, write scripts
+systems  → server, bash, infrastructure
+
+## HONESTY RULES
+- EXEC failure = report exact error, never invent output
+- File not found = say so, never invent contents
+- No docker logs available inside your container
+- Check files with EXEC, not by memory
+
+## BUSINESS CONTEXT
+- Product: Silent Vault Trust system (irrevocable non-grantor trusts, SLAT dynasty trusts)
+- Primary market: Men 35-55, $120K+/year income, asset protection, divorce protection
+- Secondary: Young men 24-38, college-educated
+- ClickUp Current Sprint: list ID 901710993025
+
+--- LIVE SYSTEM DATA ---
+{live}
+Current time: {now}
+---
+{mem_section}
+{session_section}
+"""
+
+    # ── TIER 3: Lean imperative for fast/small models ─────────────
+    else:
+        return f"""You are Jarvis, COO of Silent Empire AI. Serve Curtis Proske (Founder).
+
+RULES:
+- Deliver results immediately, no narration
+- Never fabricate — report exact errors
+- Use tools via EXEC tags, dispatch via DISPATCH tags
+- Select only needed agents (1-3 max)
+
+TOOLS:
+Search: [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
+ClickUp: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+File: [EXEC:bash]cat /ai-firm/data/reports/AGENT/file.md[/EXEC]
+Agent: [DISPATCH:name]instruction with save path[/DISPATCH]
+
+AGENTS: research, revenue, sales, growth, legal, product, code, systems
+BUSINESS: Trust business — asset protection for men $120K+/year
+
+--- LIVE DATA ---
+{live}
+Time: {now}
+---
+{mem_section}
+"""
 
 
 def _read_jarvis_memory() -> str:
@@ -388,28 +544,148 @@ def _save_chain_report(chain_id: str, topic: str, ceo_summary: str, results: dic
         print(f"[REPORT] Save failed: {e}")
         return ""
 
+
+def _get_active_jarvis_model() -> str:
+    """
+    Get the active Jarvis model. Checks Redis override first,
+    then falls back to env var. This allows UI model changes to
+    take effect without restarting the container.
+    """
+    try:
+        import redis as _redis_mod
+        _r = _redis_mod.from_url(
+            os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+            decode_responses=True
+        )
+        override = _r.get("jarvis:model_override")
+        if override and override.strip():
+            return override.strip()
+    except Exception:
+        pass
+    return os.getenv("MODEL_JARVIS_ORCHESTRATOR", "moonshotai/kimi-k2.5")
+
 def call_llm_jarvis(prompt: str) -> str:
     """
-    Primary: NVIDIA Integrate (OpenAI-compatible chat completions)
-    Fallback chain: qwen3.5 → llama-4-maverick → llama-3.3-70b → OpenAI
+    Smart provider routing:
+    - claude-* → Anthropic API
+    - gpt-* / o1 / o3 / o4 / codex → OpenAI API
+    - everything else → NVIDIA Integrate API
+    Fallback chain: primary model → llama-4-maverick → llama-3.3-70b → gpt-4.1
     """
-    model = os.getenv("MODEL_JARVIS_ORCHESTRATOR", "qwen/qwen3.5-122b-a10b")
+    model = _get_active_jarvis_model()
+    system_prompt = _build_jarvis_prompt()
+    model_lower = model.lower()
 
-    # ---- Primary: NVIDIA Integrate ----
-    nvidia_key = os.getenv("NVIDIA_API_KEY")
+    def _record_tokens(agent, m, provider, data):
+        try:
+            usage = data.get("usage", {})
+            ti  = int(usage.get("prompt_tokens", 0) or 0)
+            to_ = int(usage.get("completion_tokens", 0) or 0)
+            if ti or to_:
+                requests.post(f"{API_BASE_URL}/metrics/llm/record",
+                    json={"agent": agent, "model": m, "provider": provider,
+                          "tokens_in": ti, "tokens_out": to_,
+                          "tokens_total": ti + to_, "cost_usd": 0.0},
+                    timeout=2)
+        except Exception:
+            pass
+
+    def _process_content(content):
+        content = content.strip()
+        try:
+            content, _exec_results = jarvis_process_exec_tags(content, _current_chain_id)
+            if _exec_results:
+                print(f"[JARVIS] Executed {len(_exec_results)} autonomous actions", flush=True)
+        except Exception as _etag:
+            print(f"[JARVIS] Exec tag error: {_etag}", flush=True)
+        return content
+
+    # ── ANTHROPIC (claude-*) ──────────────────────────────────────
+    if "claude" in model_lower:
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            try:
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": model,
+                    "max_tokens": 4096,
+                    "temperature": 0.15,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=(5, 30))
+                r.raise_for_status()
+                data = r.json()
+                content = data.get("content", [{}])[0].get("text", "").strip()
+                if content:
+                    print(f"[JARVIS_CHAT] Using Anthropic: {model}", flush=True)
+                    try:
+                        usage = data.get("usage", {})
+                        ti  = int(usage.get("input_tokens", 0) or 0)
+                        to_ = int(usage.get("output_tokens", 0) or 0)
+                        if ti or to_:
+                            requests.post(f"{API_BASE_URL}/metrics/llm/record",
+                                json={"agent": "jarvis", "model": model, "provider": "anthropic",
+                                      "tokens_in": ti, "tokens_out": to_,
+                                      "tokens_total": ti + to_, "cost_usd": 0.0},
+                                timeout=2)
+                    except Exception:
+                        pass
+                    return _process_content(content)
+                print(f"[JARVIS_CHAT] Anthropic returned empty, falling back", flush=True)
+            except Exception as e:
+                print(f"[JARVIS_CHAT] Anthropic {model} failed: {str(e)[:100]}", flush=True)
+        else:
+            print("[JARVIS_CHAT] No ANTHROPIC_API_KEY — cannot use Claude", flush=True)
+        # Fall through to NVIDIA fallback chain
+        model = "meta/llama-4-maverick-17b-128e-instruct"
+
+    # ── OPENAI (gpt-*, o1, o3, o4, codex) ────────────────────────
+    elif any(x in model_lower for x in ["gpt-", "o1", "o3", "o4-", "codex"]) and "/" not in model:
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            try:
+                url = "https://api.openai.com/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.4,
+                }
+                r = requests.post(url, headers=headers, json=payload, timeout=(5, 30))
+                r.raise_for_status()
+                data = r.json()
+                content = data["choices"][0]["message"].get("content", "").strip()
+                if content:
+                    print(f"[JARVIS_CHAT] Using OpenAI: {model}", flush=True)
+                    _record_tokens("jarvis", model, "openai", data)
+                    return _process_content(content)
+                print(f"[JARVIS_CHAT] OpenAI {model} empty, falling back", flush=True)
+            except Exception as e:
+                print(f"[JARVIS_CHAT] OpenAI {model} failed: {str(e)[:100]}", flush=True)
+        else:
+            print("[JARVIS_CHAT] No OPENAI_API_KEY", flush=True)
+        # Fall through to NVIDIA fallback chain
+        model = "meta/llama-4-maverick-17b-128e-instruct"
+
+    # ── NVIDIA (kimi, deepseek, qwen, llama, mistral, nemotron) ──
+    nvidia_key  = os.getenv("NVIDIA_API_KEY")
     nvidia_base = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").rstrip("/")
 
-
-    # Try models in order until one succeeds
-    nvidia_models = [
-        model,
-        "meta/llama-4-maverick-17b-128e-instruct",
-        "meta/llama-3.3-70b-instruct",
-        "deepseek-ai/deepseek-v3.2",
-    ]
-    # Remove duplicates while preserving order
-    seen = set()
-    nvidia_models = [m for m in nvidia_models if not (m in seen or seen.add(m))]
+    # No fallback chain — fail fast and honest
+    # If the selected model fails, return clear error so Curtis can diagnose
+    nvidia_models = [model]  # Only the selected model, no silent fallback
 
     if nvidia_key:
         for attempt_model in nvidia_models:
@@ -422,11 +698,11 @@ def call_llm_jarvis(prompt: str) -> str:
                 payload = {
                     "model": attempt_model,
                     "messages": [
-                        {"role": "system", "content": _build_jarvis_prompt()},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.4,
-                    "max_tokens": 1024,
+                    "max_tokens": 4096,
                 }
                 r = requests.post(url, headers=headers, json=payload, timeout=(5, 15))
                 r.raise_for_status()
@@ -436,59 +712,16 @@ def call_llm_jarvis(prompt: str) -> str:
                 if content and content.strip():
                     if attempt_model != model:
                         print(f"[JARVIS_CHAT] Used fallback model: {attempt_model}", flush=True)
-                    try:
-                        usage = data.get("usage", {})
-                        ti  = int(usage.get("prompt_tokens", 0) or 0)
-                        to_ = int(usage.get("completion_tokens", 0) or 0)
-                        if ti or to_:
-                            requests.post(f"{API_BASE_URL}/metrics/llm/record",
-                                json={"agent":"jarvis","model":attempt_model,"provider":"nvidia",
-                                      "tokens_in":ti,"tokens_out":to_,"tokens_total":ti+to_,"cost_usd":0.0},
-                                timeout=2)
-                    except Exception:
-                        pass
-                    content = content.strip()
-                    try:
-                        content, _exec_results = jarvis_process_exec_tags(content, _current_chain_id)
-                        if _exec_results:
-                            print(f"[JARVIS] Executed {len(_exec_results)} autonomous actions", flush=True)
-                    except Exception as _etag:
-                        print(f"[JARVIS] Exec tag error: {_etag}", flush=True)
-                    return content
-                print(f"[JARVIS_CHAT] Empty content from {attempt_model}, trying next", flush=True)
+                    _record_tokens("jarvis", attempt_model, "nvidia", data)
+                    return _process_content(content)
+                print(f"[JARVIS_CHAT] Model {attempt_model} returned empty content", flush=True)
+                return f"⚠ Model `{attempt_model}` returned empty response. Check Models page and run a benchmark, or select a different model in the Agents page."
             except Exception as e:
-                print(f"[JARVIS_CHAT] {attempt_model} failed: {str(e)[:80]}", flush=True)
-                continue
+                err = str(e)[:120]
+                print(f"[JARVIS_CHAT] {attempt_model} failed: {err}", flush=True)
+                return f"⚠ Model `{attempt_model}` failed: {err}\n\nNo fallback configured. Go to Models page to run a benchmark, then select a working model in the Agents page."
 
-    # ---- Fallback: OpenAI ----
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
-        try:
-            url = "https://api.openai.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {openai_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": "gpt-4.1",
-                "messages": [
-                    {"role": "system", "content": _build_jarvis_prompt()},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.4,
-            }
-
-            r = requests.post(url, headers=headers, json=payload, timeout=60)
-            r.raise_for_status()
-            data = r.json()
-            return data["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print("[JARVIS_CHAT] OpenAI call failed:", str(e), flush=True)
-
-    # last resort
-    return "Jarvis online. (LLM unavailable) Please confirm API keys."
-
-
+    return "⚠ No NVIDIA API key configured. Cannot reach selected model."
 
 # ==================================================
 # JARVIS AUTONOMOUS EXECUTION ENGINE
@@ -985,13 +1218,17 @@ def run() -> None:
 # ==================================================
 import threading as _threading
 
+# Global flag to prevent duplicate proactive threads
+_proactive_thread_started = False
+
 def _jarvis_proactive_loop():
-    """Background thread: posts status updates to chat every 10 minutes."""
+    """Background thread: proactive COO actions every 2 hours."""
+    global _proactive_thread_started
     import time as _time
     _time.sleep(120)  # Wait 2 min after startup before first message
     while True:
         try:
-            _time.sleep(600)  # Every 10 minutes
+            _time.sleep(7200)  # Every 2 hours
             _send_proactive_update()
         except Exception as _pe:
             print(f"[PROACTIVE] Error: {_pe}")
@@ -1014,7 +1251,52 @@ def _send_proactive_update():
 
         # Build a proactive status message
         live = _fetch_live_data()
-        prompt = f"""You are Jarvis. Generate a brief proactive status update (3-5 sentences max).
+        # Gather real context before generating update
+        clickup_context = ""
+        try:
+            import subprocess as _sp
+            cu = _sp.run(
+                ["python3", "/ai-firm/tools/clickup_cli.py", "list-tasks", "901710993025"],
+                capture_output=True, text=True, timeout=10
+            )
+            if cu.returncode == 0 and cu.stdout.strip():
+                clickup_context = f"Current Sprint tasks:\n{cu.stdout.strip()[:800]}"
+        except Exception:
+            pass
+
+        # Check for new agent reports in last 2 hours
+        new_files_context = ""
+        try:
+            import subprocess as _sp
+            nf = _sp.run(
+                ["find", "/ai-firm/data/reports", "-name", "*.md",
+                 "-newer", "/ai-firm/data/memory/jarvis/SESSION-STATE.md",
+                 "-not", "-name", ".gitkeep"],
+                capture_output=True, text=True, timeout=5
+            )
+            if nf.stdout.strip():
+                new_files_context = f"New agent reports since last check:\n{nf.stdout.strip()[:400]}"
+        except Exception:
+            pass
+
+        prompt = f"""You are Jarvis, autonomous COO of Silent Empire AI.
+You are sending a proactive update to Curtis (Founder).
+
+Context available:
+{clickup_context or "No ClickUp data available."}
+{new_files_context or "No new agent reports."}
+
+LIVE DATA: {_fetch_live_data()[:500]}
+
+Generate a SHORT (3-5 sentences) proactive update that:
+1. Reports ONE specific thing that actually happened or needs attention
+2. States what you are doing about it or recommend as next action
+3. Is concrete and actionable — not generic status narration
+
+Do NOT say "all agents are idle" unless you have something specific to add.
+Do NOT repeat the same update as last time.
+If nothing notable happened, ask Curtis ONE strategic question about the trust business.
+Never start with "Status Update". Be conversational and direct.
 Based on this live data:
 {live}
 
@@ -1055,9 +1337,10 @@ Be direct and concise. No headers. No bullet points. Just a natural status updat
         print(f"[PROACTIVE] Send error: {e}")
 
 # Start proactive thread
-_proactive_thread = _threading.Thread(target=_jarvis_proactive_loop, daemon=True)
+_proactive_thread = _threading.Thread(target=_jarvis_proactive_loop, daemon=True, name="jarvis-proactive")
 _proactive_thread.start()
-print("[PROACTIVE] Proactive messaging thread started (updates every 10 min)")
+print("[Proactive] Thread started.", flush=True)
+print("[PROACTIVE] Proactive messaging thread started (updates every 2 hours)")
 
 
 if __name__ == "__main__":

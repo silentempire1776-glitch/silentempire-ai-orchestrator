@@ -74,42 +74,21 @@ def run_model(model: str, messages: list, timeout: int = 120):
         "anthropic": anthropic_provider,
     }
 
-    # Fallback chain per provider
-    fallback_chain = {
-        "nvidia":    [("openai",    "gpt-4.1"),
-                      ("anthropic", "claude-sonnet-4-5")],
-        "openai":    [("nvidia",    "moonshotai/kimi-k2.5"),
-                      ("anthropic", "claude-sonnet-4-5")],
-        "anthropic": [("nvidia",    "moonshotai/kimi-k2.5"),
-                      ("openai",    "gpt-4.1")],
-    }
-
     if FORCE_FREE_MODE:
         provider_name = "nvidia"
         print("ROUTER POLICY: FORCE_FREE_MODE active → Using nvidia only")
 
     primary = provider_map[provider_name]
 
+    # Fail-fast: no silent fallback chain.
+    # If the model fails, raise immediately so the error surfaces in chat.
     try:
         result = primary.run(model=clean_model, messages=messages, timeout=timeout)
         result["provider"] = provider_name
         return result
     except Exception as primary_error:
-        print(f"PRIMARY PROVIDER ({provider_name}) FAILED: {primary_error}")
-        if FORCE_FREE_MODE:
-            raise primary_error
-
-        for fallback_provider_name, fallback_model in fallback_chain.get(provider_name, []):
-            if health_map.get(fallback_provider_name, 0) < MIN_HEALTH_THRESHOLD:
-                continue
-            try:
-                print(f"Attempting fallback: {fallback_provider_name}/{fallback_model}")
-                fallback = provider_map[fallback_provider_name]
-                result = fallback.run(model=fallback_model, messages=messages, timeout=timeout)
-                result["provider"] = fallback_provider_name
-                return result
-            except Exception as fe:
-                print(f"Fallback {fallback_provider_name} failed: {fe}")
-                continue
-
-        raise Exception(f"All providers failed. Primary: {primary_error}")
+        print(f"PROVIDER ({provider_name}/{clean_model}) FAILED: {primary_error}")
+        raise Exception(
+            f"Model `{clean_model}` ({provider_name}) failed: {str(primary_error)[:120]}. "
+            f"No fallback configured. Check Models page, run benchmark, select working model."
+        )

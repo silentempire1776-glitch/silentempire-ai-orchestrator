@@ -1,57 +1,57 @@
 """
-=========================================================
-Legal Agent — Elite Legal Risk Architecture Module
-Version: 4.1 (Elite Hardened Merge)
-Durable + Idempotent Guard + Retry + Dead Letter + Guards
-=========================================================
+Legal Agent — Version 6.0
+Fixed: job waiting + file writing + markdown output
 """
 
 import json
+import os
 import time
-from typing import Any
+import traceback
+from typing import Any, Dict
 
 from shared.redis_bus import enqueue, dequeue_blocking
-from shared.job_submitter import submit_job
 from shared.artifact import build_artifact
 from shared.artifact_store import stage_already_completed, mark_stage_completed
+from job_runner import submit_and_wait, extract_save_path, write_report
 
-AGENT_NAME = "legal"
-
-QUEUE_NAME = "queue.agent.legal"
+AGENT_NAME  = "legal"
+QUEUE_NAME  = "queue.agent.legal"
 RETRY_QUEUE = "queue.agent.legal.retry"
-DEAD_QUEUE = "queue.agent.legal.dead"
-
+DEAD_QUEUE  = "queue.agent.legal.dead"
 MAX_RETRIES = 3
 
 
-# --------------------------------------------------
-# SAFE NORMALIZER (ADDED — NON-DESTRUCTIVE)
-# --------------------------------------------------
-
-def _as_dict(obj: Any):
+def _as_dict(obj: Any) -> Dict:
     if obj is None:
         return {}
     if isinstance(obj, dict):
         return obj
+    if isinstance(obj, (bytes, bytearray)):
+        obj = obj.decode("utf-8", errors="replace")
+    if isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
     try:
         return dict(obj)
     except Exception:
         return {}
 
 
-# --------------------------------------------------
-# LEGAL INSTRUCTION BUILDER (UNCHANGED)
-# --------------------------------------------------
+def build_instruction(executive, identity, soul, payload):
+    instruction = (
+        payload.get("instruction") or
+        payload.get("message") or
+        payload.get("target") or
+        payload.get("product") or
+        "Perform your specialist analysis."
+    )
+    save_path = extract_save_path(instruction)
+    file_note = f"\nYour output will be saved to: {save_path}" if save_path else ""
 
-def build_legal_instruction(executive, identity, soul, artifact):
-
-    upstream_data = {}
-
-    if artifact and isinstance(artifact, dict):
-        upstream_data = artifact.get("data", {})
-
-    return f"""
-=== EXECUTIVE STACK ===
+    return f"""=== EXECUTIVE STACK ===
 {executive}
 
 === AGENT IDENTITY ===
@@ -60,187 +60,113 @@ def build_legal_instruction(executive, identity, soul, artifact):
 === AGENT SOUL ===
 {soul}
 
-=== UPSTREAM PRODUCT ARCHITECTURE ===
-{json.dumps(upstream_data, indent=2)}
+You are the Legal Risk Architect for Silent Empire AI.
+Deliver a professional legal risk analysis report in markdown format.
+Cover: Risk Exposure Map, Regulatory Touchpoints, Required Disclaimers,
+Jurisdiction Sensitivities, Marketing Claim Boundaries, High-Risk Language,
+Client Suitability Warnings, Compliance Structure, Liability Reduction,
+and Documentation Checklist.
+Be precise. Flag all meaningful legal risks clearly.
+Frame as risk identification only — not legal advice.
 
-You are the Legal Risk Architect.
+TASK:
+{instruction}
+{file_note}
 
-Generate:
+Do NOT return JSON. Return a well-structured markdown document.
+Do NOT add preamble — start directly with the content.
+""".strip()
 
-1. Risk Exposure Map
-2. Regulatory Touchpoints
-3. Required Disclaimers
-4. Jurisdiction Sensitivities
-5. Marketing Claim Boundaries
-6. High-Risk Language to Avoid
-7. Client Suitability Warnings
-8. Compliance Structure
-9. Liability Reduction Strategy
-10. Documentation Checklist
-
-Risk identification only.
-Structured.
-Precise.
-"""
-
-
-# --------------------------------------------------
-# TASK PROCESSOR (HARDENED — PRESERVES LOGIC)
-# --------------------------------------------------
 
 def process_task(raw_envelope):
-
     envelope = _as_dict(raw_envelope)
-
-    # 🔒 ENVELOPE GUARD
     if not isinstance(envelope, dict) or not envelope:
         print("[LEGAL] Skipping invalid envelope", flush=True)
         return
 
-    doctrine = _as_dict(envelope.get("doctrine"))
-
-    executive = doctrine.get("executive", "")
-    identity = doctrine.get("identity", "")
-    soul = doctrine.get("soul", "")
+    doctrine_raw = envelope.get("doctrine", {})
+    if isinstance(doctrine_raw, str):
+        executive = doctrine_raw
+        identity = soul = ""
+    else:
+        d = _as_dict(doctrine_raw)
+        executive = d.get("executive", "")
+        identity  = d.get("identity", "")
+        soul      = d.get("soul", "")
 
     task_type = envelope.get("task_type")
+    payload   = _as_dict(envelope.get("payload"))
+    chain_id  = payload.get("chain_id") or envelope.get("chain_id")
 
-    payload = _as_dict(envelope.get("payload"))
-    upstream_artifact = envelope.get("result") or payload
-    upstream_artifact = _as_dict(upstream_artifact)
-
-    chain_id = payload.get("chain_id")
-
-    # 🔒 TASK VALIDATION
-    if not task_type or not isinstance(payload, dict):
-        print(f"[LEGAL] Skipping invalid task | task_type={task_type}", flush=True)
+    if not task_type:
+        print("[LEGAL] Missing task_type, skipping", flush=True)
         return
 
-    # IDEMPOTENT GUARD (PRESERVED)
     if chain_id and stage_already_completed(chain_id, AGENT_NAME):
-        print(f"[LEGAL] Stage already completed for {chain_id}, skipping.", flush=True)
+        print(f"[LEGAL] Stage already completed: {chain_id}", flush=True)
         return
 
-    print(f"[LEGAL] Processing task: {task_type} | chain_id={chain_id}", flush=True)
+    print(f"[LEGAL] Processing task_type={task_type} chain_id={chain_id}", flush=True)
 
-    # --- CHAT PASSTHROUGH (non-regressive) ---
     if task_type == "chat":
-        msg = payload.get("message")
-        if msg is None:
-            msg = payload.get("product")
-
+        message = payload.get("message") or payload.get("product", "")
         if chain_id:
             mark_stage_completed(chain_id, AGENT_NAME)
-
         enqueue("queue.orchestrator.results", {
-            "agent": AGENT_NAME,
-            "task_type": "chat",
-            "result": {
-                "artifact_type": "chat_echo",
-                "version": "1.0",
-                "data": {
-                    "text": f"[Legal Agent] Received: {msg}"
-                }
-            },
-            "payload": payload,
-            "doctrine": doctrine
+            "agent": AGENT_NAME, "task_type": "chat", "status": "ok",
+            "result": build_artifact("chat_echo", "1.0", {"text": f"[Legal Agent] Received: {message}"}),
+            "payload": payload, "doctrine": envelope.get("doctrine"),
         })
         return
-    # --- END CHAT PASSTHROUGH ---
 
-    if task_type != "offer_stack":
-        print(f"[LEGAL] Unknown task type: {task_type}", flush=True)
-        return
+    instruction = build_instruction(executive, identity, soul, payload)
+    result_text = submit_and_wait(AGENT_NAME, instruction)
 
-    instruction = build_legal_instruction(
-        executive,
-        identity,
-        soul,
-        upstream_artifact
-    )
+    save_path = extract_save_path(payload.get("instruction") or payload.get("message") or "")
+    file_written = None
+    if save_path and result_text:
+        if write_report(save_path, result_text, AGENT_NAME):
+            file_written = save_path
 
-    # AI EXECUTION (UNCHANGED CORE)
-    result = submit_job("ai_task", {
-        "instruction": instruction,
-        "agent": AGENT_NAME
-    })
-
-    # 🔒 SAFE OUTPUT
-    if not result:
-        result = {"error": "empty_response"}
-
-    structured_output = build_artifact(
-        "legal_review",
-        "1.0",
-        {
-            "raw_legal_analysis": result
-        }
-    )
-
-    # MARK COMPLETE
     if chain_id:
         mark_stage_completed(chain_id, AGENT_NAME)
 
     enqueue("queue.orchestrator.results", {
-        "agent": AGENT_NAME,
-        "task_type": task_type,
-        "result": structured_output,
-        "payload": payload,
-        "doctrine": doctrine
+        "agent": AGENT_NAME, "task_type": task_type, "status": "ok",
+        "result": build_artifact("legal_report", "2.0", {
+            "report": result_text, "file_written": file_written, "agent": AGENT_NAME,
+        }),
+        "payload": payload, "doctrine": envelope.get("doctrine"),
     })
+    print(f"[LEGAL] Complete. file_written={file_written}", flush=True)
 
-
-# --------------------------------------------------
-# MAIN LOOP (RETRY + DEAD LETTER — PRESERVED + HARDENED)
-# --------------------------------------------------
 
 def run():
-    print("[LEGAL] Elite Legal Architect online. (Durable + Retry Mode)", flush=True)
-
+    print("[LEGAL] Legal Agent online. v6.0", flush=True)
     while True:
         try:
             raw = dequeue_blocking(QUEUE_NAME)
             envelope = _as_dict(raw)
-
             retry_count = envelope.get("retry_count", 0)
-
             try:
                 process_task(envelope)
-
             except Exception as error:
                 retry_count += 1
                 envelope["retry_count"] = retry_count
-
-                print(f"[LEGAL ERROR] Task failure | retry={retry_count} | error={error}", flush=True)
-
+                print(f"[LEGAL ERROR] retry={retry_count} | {error}", flush=True)
+                print(traceback.format_exc(), flush=True)
                 if retry_count < MAX_RETRIES:
                     enqueue(RETRY_QUEUE, envelope)
-                    print("[LEGAL] Sent to retry queue.", flush=True)
                 else:
                     enqueue(DEAD_QUEUE, envelope)
-
                     enqueue("queue.orchestrator.results", {
-                        "agent": AGENT_NAME,
-                        "task_type": envelope.get("task_type"),
-                        "result": {
-                            "artifact_type": "error",
-                            "version": "1.0",
-                            "data": {
-                                "error": str(error),
-                                "retry_count": retry_count
-                            }
-                        },
-                        "payload": envelope.get("payload"),
-                        "doctrine": envelope.get("doctrine"),
-                        "status": "failed"
+                        "agent": AGENT_NAME, "task_type": envelope.get("task_type"),
+                        "result": build_artifact("error", "1.0", {"error": str(error), "retry_count": retry_count}),
+                        "payload": envelope.get("payload"), "doctrine": envelope.get("doctrine"), "status": "failed",
                     })
-
-                    print("[LEGAL] Moved to DEAD queue + notified orchestrator.", flush=True)
-
         except Exception as queue_error:
-            print(f"[LEGAL ERROR] Queue failure: {queue_error}", flush=True)
+            print(f"[LEGAL QUEUE ERROR] {queue_error}", flush=True)
             time.sleep(2)
-
 
 if __name__ == "__main__":
     run()

@@ -102,6 +102,7 @@ export default function Home() {
   const [agents,setAgents]   = useState<AData[]>(
     AGENTS.map(n=>({name:n,state:"online_idle" as AState,tokToday:0,tokAvgDay:0,model:AGENT_MODELS[n]||"—",perfScore:null,latencyMs:0}))
   )
+  const [modelOverrides,setModelOverrides] = useState<Record<string,string>>({})
   const [mData,setMData]     = useState<{t:Record<string,number>;y:Record<string,number>;w:Record<string,number>}>({t:{},y:{},w:{}})
   const [monthCost,setMC]    = useState(0)
   const [todayCost,setTC]    = useState(0)
@@ -113,18 +114,21 @@ export default function Home() {
 
   const load = async () => {
     try {
-      const [mR,uR,lR,sR,bR] = await Promise.all([
+      const [mR,uR,lR,sR,bR,ovR] = await Promise.all([
         fetch("/api/metrics"),
         fetch("/api/metrics/usage"),
         fetch("/api/metrics/llm").catch(()=>null),
         fetch("/api/metrics/llm/summary").catch(()=>null),
         fetch("/api/metrics/models/summary").catch(()=>null),
+        fetch("/api/agent/model-override").catch(()=>null),
       ])
       const m = mR.ok?await mR.json():{}
       const u = uR.ok?await uR.json():{}
       const l = lR&&lR.ok?await lR.json():{}
       const s = sR&&sR.ok?await sR.json():{}
       const b = bR&&bR.ok?await bR.json():{}
+      const ov = ovR&&ovR.ok?await ovR.json():{}
+      if (ov && typeof ov === "object") setModelOverrides(ov)
 
       setJm(m)
       setTC(u.last_24_hours?.cost_usd??0)
@@ -167,7 +171,7 @@ export default function Home() {
           state:     (sm[n]==="working"?"working":"online_idle") as AState,
           tokToday:  at[n]?.tokens_total ?? 0,
           tokAvgDay: Math.round((aw[n]?.tokens_total ?? 0) / 7),
-          model:     AGENT_MODELS[n] || "—",
+          model:     (ov && (ov as any)[n]) ? ((ov as any)[n] as string).split("/").pop()! : AGENT_MODELS[n] || "—",
           perfScore: bData.performance_score != null ? Number(bData.performance_score) : null,
           latencyMs: bData.latency_ms ? Number(bData.latency_ms) : 0,
         }

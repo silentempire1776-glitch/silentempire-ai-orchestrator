@@ -186,48 +186,35 @@ def _call_openai(model: str, messages: list, timeout: int) -> dict:
 # NVIDIA FALLBACK CHAIN
 # --------------------------------------------------
 
-NVIDIA_FALLBACK_CHAIN = [
-    "meta/llama-4-maverick-17b-128e-instruct",
-    "meta/llama-3.3-70b-instruct",
-    "deepseek-ai/deepseek-v3.2",
-]
-
-
 def _call_with_fallback(model: str, messages: list, timeout: int) -> dict:
+    """
+    Fail-fast: no silent fallback chain.
+    If the selected model fails, raise immediately with a clear error.
+    """
     provider, clean_model = _normalize_model(model)
 
-    if provider == "openai" or FORCE_FREE is False and _is_openai_model(model):
+    if provider == "openai" or _is_openai_model(model):
         try:
             return _call_openai(clean_model, messages, timeout)
         except Exception as e:
-            if FORCE_FREE:
-                raise
-            print(f"[MCP:llm_router] OpenAI failed ({e}), trying NVIDIA", flush=True)
+            raise RuntimeError(
+                f"Model `{clean_model}` (OpenAI) failed: {str(e)[:120]}. "
+                f"Check Models page and run a benchmark, or select a different model."
+            )
 
-    # NVIDIA path with fallback chain
-    attempts = [clean_model] + [m for m in NVIDIA_FALLBACK_CHAIN if m != clean_model]
-    last_error = None
-
-    for attempt in attempts:
-        try:
-            result = _call_nvidia(attempt, messages, timeout)
-            if result["content"]:
-                if attempt != clean_model:
-                    print(f"[MCP:llm_router] Used fallback model: {attempt}", flush=True)
-                return result
-        except Exception as e:
-            last_error = e
-            print(f"[MCP:llm_router] {attempt} failed: {str(e)[:80]}", flush=True)
-            continue
-
-    # Last resort: OpenAI
-    if not FORCE_FREE and OPENAI_KEY:
-        try:
-            return _call_openai("gpt-4o-mini", messages, 60)
-        except Exception as e:
-            last_error = e
-
-    raise RuntimeError(f"All LLM providers failed. Last: {last_error}")
+    # NVIDIA path — no fallback
+    try:
+        result = _call_nvidia(clean_model, messages, timeout)
+        if result["content"]:
+            return result
+        raise RuntimeError(f"Model `{clean_model}` returned empty content.")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(
+            f"Model `{clean_model}` (NVIDIA) failed: {str(e)[:120]}. "
+            f"Check Models page and run a benchmark, or select a different model."
+        )
 
 
 # --------------------------------------------------

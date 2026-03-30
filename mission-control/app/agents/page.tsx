@@ -116,26 +116,6 @@ const MODEL_LABELS: Record<string,string> = {
   "o3-mini":                                       "o3-mini (OpenAI reasoning $1.1/M)",
   "o4-mini":                                       "o4-mini (OpenAI reasoning fast $1.1/M)",
   "codex-mini-latest":                             "codex-mini (OpenAI coding $1.5/M)",
-  "claude-sonnet-4-5":                             "claude-sonnet-4-5 (Anthropic)",
-  "claude-haiku-4-5-20251001":                     "claude-haiku-4-5 (Anthropic fast)",
-  "claude-opus-4-6":                               "claude-opus-4-6 (Anthropic best)",
-  // OpenAI
-  "gpt-4.1":                                       "gpt-4.1 (OpenAI)",
-  "gpt-4.1-mini":                                  "gpt-4.1-mini (OpenAI fast)",
-  "gpt-4.1-nano":                                  "gpt-4.1-nano (OpenAI fastest)",
-  "gpt-4o":                                        "gpt-4o (OpenAI)",
-  "gpt-4o-mini":                                   "gpt-4o-mini (OpenAI fast)",
-  "o1":                                            "o1 (OpenAI reasoning)",
-  "o1-mini":                                       "o1-mini (OpenAI reasoning fast)",
-  "o3":                                            "o3 (OpenAI reasoning best)",
-  "o3-mini":                                       "o3-mini (OpenAI reasoning)",
-  "o4-mini":                                       "o4-mini (OpenAI reasoning fast)",
-  "codex-mini-latest":                             "codex-mini (OpenAI coding)",
-  // OpenAI GPT-5.x
-  "gpt-5.4":                                       "gpt-5.4 (OpenAI flagship)",
-  "gpt-5.4-mini":                                  "gpt-5.4-mini (OpenAI fast)",
-  "gpt-5.4-nano":                                  "gpt-5.4-nano (OpenAI fastest)",
-  "gpt-5":                                         "gpt-5 (OpenAI)",
 }
 
 
@@ -336,8 +316,8 @@ export default function AgentsPage() {
 
   const getModelForAgent = (id: string) => overrides[id] || SERVER_DEFAULTS[id] || ""
   const isOverridden     = (id: string) => !!overrides[id] && overrides[id] !== SERVER_DEFAULTS[id]
-  const setOverride      = (id: string, v: string) => setOverrides(p => ({ ...p, [id]: v }))
-  const clearOverride    = (id: string) => setOverrides(p => { const n={...p}; delete n[id]; return n })
+  const setOverride      = (id: string, v: string) => { setOverrides(p => ({ ...p, [id]: v })); fetch("/api/agent/model-override", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:id,model:v})}).catch(()=>{}); }
+  const clearOverride    = (id: string) => { setOverrides(p => { const n={...p}; delete n[id]; return n }); fetch("/api/agent/model-override", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:id,model:""})}).catch(()=>{}); }
 
   const getHealth = (agentId: string) => {
     const model = getModelForAgent(agentId)

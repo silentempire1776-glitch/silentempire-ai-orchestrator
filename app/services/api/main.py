@@ -153,6 +153,76 @@ class ChainEventPayload(BaseModel):
 # HEALTH
 # --------------------------------------------------
 
+
+@app.post("/agent/model-override")
+async def set_agent_model_override(request: Request):
+    """Set the active model for Jarvis via Redis. Takes effect immediately."""
+    try:
+        body = await request.json()
+        agent = body.get("agent", "jarvis")
+        model = body.get("model", "").strip()
+
+        if not model:
+            raise HTTPException(status_code=400, detail="model is required")
+
+        import redis as _redis_mod
+        _r = _redis_mod.from_url(
+            os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+            decode_responses=True
+        )
+
+        if agent == "jarvis":
+            if not model:
+                _r.delete("jarvis:model_override")
+                return {"status": "ok", "agent": agent, "model": "", "message": "Jarvis override cleared"}
+            _r.set("jarvis:model_override", model)
+            return {"status": "ok", "agent": agent, "model": model,
+                    "message": f"Jarvis will now use {model} on next message"}
+        else:
+            if not model:
+                _r.delete(f"agent:model_override:{agent}")
+                return {"status": "ok", "agent": agent, "model": "", "message": f"{agent} override cleared"}
+            _r.set(f"agent:model_override:{agent}", model)
+            return {"status": "ok", "agent": agent, "model": model}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/agent/model-override")
+async def get_agent_model_override():
+    """Get current model overrides for all agents."""
+    ALL_AGENT_DEFAULTS = {
+        "jarvis":   os.getenv("MODEL_JARVIS_ORCHESTRATOR", "moonshotai/kimi-k2.5"),
+        "research": os.getenv("MODEL_RESEARCH",            "moonshotai/kimi-k2-thinking"),
+        "revenue":  os.getenv("MODEL_FINANCIAL_STRATEGY",  "moonshotai/kimi-k2.5"),
+        "sales":    os.getenv("MODEL_MARKETING",           "moonshotai/kimi-k2.5"),
+        "growth":   os.getenv("MODEL_STRATEGIC_PLANNING",  "moonshotai/kimi-k2.5"),
+        "product":  os.getenv("MODEL_CODING",              "moonshotai/kimi-k2-instruct"),
+        "legal":    os.getenv("MODEL_LEGAL_STRUCTURING",   "moonshotai/kimi-k2-thinking"),
+        "systems":  os.getenv("MODEL_SYSTEMS",             "qwen/qwen3-coder-480b-a35b-instruct"),
+        "code":     os.getenv("MODEL_MICRO_CODING",        "qwen/qwen3-coder-480b-a35b-instruct"),
+        "voice":    os.getenv("MODEL_FAST_WORKER",         "meta/llama-4-maverick-17b-128e-instruct"),
+    }
+    try:
+        import redis as _redis_mod
+        _r = _redis_mod.from_url(
+            os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+            decode_responses=True
+        )
+        result = {}
+        for agent, default in ALL_AGENT_DEFAULTS.items():
+            # Check jarvis-specific key first for backwards compat
+            if agent == "jarvis":
+                override = _r.get("jarvis:model_override")
+            else:
+                override = _r.get(f"agent:model_override:{agent}")
+            result[agent] = override if override and override.strip() else default
+        return result
+    except Exception as e:
+        return {**ALL_AGENT_DEFAULTS, "error": str(e)}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -1432,17 +1502,55 @@ def get_models_summary():
             "MODEL_FAST_WORKER":         "voice",
         }
         role_fit: dict = {}
+        # Override jarvis role with Redis active model if set
+        try:
+            import redis as _rfx
+            _rfxr = _rfx.from_url(
+                os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                decode_responses=True
+            )
+            _jmo = _rfxr.get("jarvis:model_override")
+            if _jmo and _jmo.strip():
+                _jmo = _jmo.strip()
+                # Remove jarvis from old env-based model entry later
+                _jarvis_redis_model = _jmo
+            else:
+                _jarvis_redis_model = None
+        except Exception:
+            _jarvis_redis_model = None
+        # Load ALL agent overrides from Redis
+        _all_redis_overrides = {}
+        try:
+            import redis as _rfx2
+            _rfxr2 = _rfx2.from_url(
+                os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                decode_responses=True
+            )
+            _agent_roles = ["jarvis","research","revenue","sales","growth","product","legal","systems","code","voice"]
+            for _ag in _agent_roles:
+                if _ag == "jarvis":
+                    _ov = _rfxr2.get("jarvis:model_override")
+                else:
+                    _ov = _rfxr2.get(f"agent:model_override:{_ag}")
+                if _ov and _ov.strip():
+                    _all_redis_overrides[_ag] = _ov.strip()
+        except Exception:
+            pass
+
         for env_var, role in ENV_ROLE_MAP.items():
             m = os.getenv(env_var, "")
             if not m:
-                # fallback to benchmark report
                 for r, info in assignments.items():
                     if r == role:
                         m = info.get("model", "")
+            # Use Redis override for any agent if available
+            if role in _all_redis_overrides:
+                m = _all_redis_overrides[role]
             if m:
                 if m not in role_fit:
                     role_fit[m] = []
-                role_fit[m].append(role)
+                if role not in role_fit[m]:
+                    role_fit[m].append(role)
 
         # Build good_for map from hardcoded role-model affinity
         # (role_configs removed from benchmark — this is the authoritative source)
