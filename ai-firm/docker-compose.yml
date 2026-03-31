@@ -16,6 +16,14 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_SCORE_THRESHOLD: "7"
+
       DATABASE_URL: postgresql://silent:Forex001%2F@postgres:5432/silentempire
       HEARTBEAT_INTERVAL: 1800
       AUTONOMY_MODE: "false"

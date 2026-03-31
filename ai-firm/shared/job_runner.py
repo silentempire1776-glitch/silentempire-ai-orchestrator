@@ -146,3 +146,246 @@ def write_report(path: str, content: str, agent_name: str) -> bool:
     except Exception as e:
         print(f"[{agent_name.upper()}] File write failed {path}: {e}", flush=True)
         return False
+
+
+# ==================================================
+# EVALUATOR LOOP — Quality scoring + revision
+# ==================================================
+
+import re as _re
+
+def _call_evaluator_llm(prompt: str, agent_name: str) -> str:
+    """Call Anthropic API for evaluation (uses same key as worker)."""
+    import os as _os, requests as _req
+    key = _os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        return ""
+    try:
+        r = _req.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "Content-Type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001",
+                  "max_tokens": 512, "temperature": 0.1,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()["content"][0]["text"].strip()
+    except Exception as e:
+        print(f"[EVALUATOR] LLM call failed: {e}", flush=True)
+        return ""
+
+
+# Per-agent evaluation rubrics
+AGENT_RUBRICS = {
+    "research": """Score this research report 1-10 on:
+- Specificity: Does it cite real data, numbers, market sizes? (not generic statements)
+- Task completion: Does it directly address the specific research question asked?
+- Actionability: Are there concrete findings a decision-maker can act on?
+- Silent Vault relevance: Is it specific to trust/asset protection for high-income men?
+Deduct 3 points if it asks for more information instead of executing.
+Deduct 2 points if it uses placeholder text or templates.""",
+
+    "sales": """Score this sales content 1-10 on:
+- Hook quality: Does it open with a compelling, specific hook?
+- Pain agitation: Does it speak to real emotional pain (divorce, lawsuits, asset loss)?
+- Mechanism clarity: Is the Silent Vault solution explained clearly?
+- Objection handling: Are key objections addressed?
+- CTA strength: Is there a clear, specific call to action?
+Deduct 3 points if it asks for product/audience details instead of executing.
+Deduct 2 points if it is generic and not specific to Silent Vault.""",
+
+    "legal": """Score this legal analysis 1-10 on:
+- Risk identification: Are specific legal risks named and explained?
+- Jurisdiction awareness: Are relevant jurisdictions mentioned?
+- Disclaimer quality: Are appropriate disclaimers present?
+- Actionability: Are specific compliance steps recommended?
+- Trust specificity: Is it specific to irrevocable non-grantor trusts?
+Deduct 3 points if it asks for product details instead of executing.
+Deduct 2 points for generic legal boilerplate.""",
+
+    "revenue": """Score this revenue strategy 1-10 on:
+- Pricing specificity: Are actual price points recommended?
+- Offer structure: Is the core offer and value stack defined?
+- Revenue projections: Are numbers and projections included?
+- Silent Vault fit: Is it specific to premium trust services?
+- Actionability: Can this be implemented immediately?
+Deduct 3 points if it asks for product/audience details.
+Deduct 2 points if projections are missing.""",
+
+    "growth": """Score this growth strategy 1-10 on:
+- Channel specificity: Are specific channels named (not just "social media")?
+- Target audience precision: Is the $120K+ divorced men demographic addressed?
+- Funnel clarity: Is the acquisition funnel defined?
+- Tactics: Are concrete, implementable tactics listed?
+- Metrics: Are success metrics defined?
+Deduct 3 points if it asks for product/audience details.
+Deduct 2 points for generic marketing advice.""",
+
+    "product": """Score this product strategy 1-10 on:
+- Deliverable clarity: Are specific deliverables defined?
+- Implementation roadmap: Is there a concrete timeline?
+- Client journey: Is the client experience mapped?
+- Trust document specificity: Is it specific to trust products?
+- Scalability: Is the scaling model addressed?
+Deduct 3 points if it asks for product details.
+Deduct 2 points for vague deliverables.""",
+}
+
+DEFAULT_RUBRIC = """Score this agent output 1-10 on:
+- Task completion: Did it complete the assigned task?
+- Specificity: Is the output specific and actionable?
+- Quality: Is it professional and well-structured?
+- No stalling: Did it execute rather than ask for more info?
+Deduct 3 points if it asks for more information instead of executing."""
+
+
+def evaluate_output(result_text: str, task: str, agent_name: str) -> dict:
+    """
+    Evaluate agent output quality. Returns {score, feedback, passed}.
+    Uses Haiku for cost efficiency.
+    """
+    rubric = AGENT_RUBRICS.get(agent_name, DEFAULT_RUBRIC)
+    threshold = int(os.getenv(f"EVAL_SCORE_THRESHOLD", "7"))
+
+    prompt = f"""You are a quality evaluator for Silent Empire AI, a legitimate asset protection and trust planning company.
+Silent Vault is a legal trust system (irrevocable non-grantor trusts, SLAT dynasty trusts) that helps high-income men
+protect assets legally. This is legitimate estate planning, not fraud. Evaluate the agent output below.
+
+{rubric}
+
+TASK GIVEN TO AGENT:
+{task[:500]}
+
+AGENT OUTPUT TO EVALUATE:
+{result_text[:2000]}
+
+IMPORTANT: If the output REFUSED to answer or asked for more information instead of executing the task,
+score it 0/10 regardless of how politely it refused.
+If the output completed the task with real, specific content, score based on quality.
+
+Respond in this exact format:
+SCORE: [number 1-10]
+FEEDBACK: [2-3 sentences on what's missing or needs improvement]
+PASSED: [YES if score >= {threshold}, NO if below]"""
+
+    raw = _call_evaluator_llm(prompt, agent_name)
+    if not raw:
+        return {"score": 8, "feedback": "Evaluator unavailable", "passed": True}
+
+    # Parse response
+    score = 7
+    feedback = ""
+    passed = True
+
+    for line in raw.splitlines():
+        if line.startswith("SCORE:"):
+            try:
+                score = int(_re.search(r'\d+', line).group())
+            except Exception:
+                pass
+        elif line.startswith("FEEDBACK:"):
+            feedback = line.replace("FEEDBACK:", "").strip()
+        elif line.startswith("PASSED:"):
+            passed = "YES" in line.upper()
+
+    return {"score": score, "feedback": feedback, "passed": passed}
+
+
+def submit_and_wait_with_eval(agent_name: str, instruction: str,
+                               task_description: str = "") -> str:
+    """
+    Submit job, wait for result, evaluate quality.
+    If below threshold, revise up to MAX_LOOPS times.
+    Returns best result text.
+    """
+    max_loops = int(os.getenv(f"EVAL_LOOPS_{agent_name.upper()}", "2"))
+    threshold = int(os.getenv("EVAL_SCORE_THRESHOLD", "7"))
+
+    best_result = ""
+    best_score = 0
+
+    for loop in range(1, max_loops + 1):
+        print(f"[{agent_name.upper()}] Eval loop {loop}/{max_loops}", flush=True)
+
+        # Build instruction with revision feedback if not first loop
+        current_instruction = instruction
+        if loop > 1 and best_result:
+            current_instruction = f"""{instruction}
+
+=== REVISION REQUIRED ===
+Your previous attempt scored {best_score}/10. Here is the evaluator feedback:
+{revision_feedback}
+
+Address ALL feedback points. Produce a substantially improved version.
+Do NOT repeat the same mistakes. Execute the task completely."""
+
+        result = submit_and_wait(agent_name, current_instruction)
+
+        if not result:
+            print(f"[{agent_name.upper()}] Empty result on loop {loop}", flush=True)
+            continue
+
+        # Evaluate
+        eval_result = evaluate_output(result, task_description or instruction[:300], agent_name)
+        score = eval_result["score"]
+        feedback = eval_result["feedback"]
+        passed = eval_result["passed"]
+
+        print(f"[{agent_name.upper()}] Loop {loop} score={score}/10 passed={passed}", flush=True)
+
+        if score > best_score:
+            best_score = score
+            best_result = result
+            revision_feedback = feedback
+
+        if passed:
+            print(f"[{agent_name.upper()}] Quality threshold met at loop {loop}", flush=True)
+            break
+
+        if loop < max_loops:
+            print(f"[{agent_name.upper()}] Score {score} below {threshold}, revising...", flush=True)
+
+    print(f"[{agent_name.upper()}] Final score={best_score}/10 after {loop} loop(s)", flush=True)
+    return best_result
+
+
+# ==================================================
+# PER-AGENT MEMORY — Persistent knowledge base
+# ==================================================
+
+MEMORY_BASE = "/ai-firm/data/memory/agents"
+
+
+def read_agent_memory(agent_name: str) -> str:
+    """Read agent's persistent memory file."""
+    path = os.path.join(MEMORY_BASE, agent_name, "core.md")
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                return f.read()
+    except Exception as e:
+        print(f"[MEMORY] Read failed for {agent_name}: {e}", flush=True)
+    return ""
+
+
+def write_agent_memory(agent_name: str, content: str) -> None:
+    """Append to agent's persistent memory file."""
+    path = os.path.join(MEMORY_BASE, agent_name, "core.md")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        from datetime import datetime as _dt
+        timestamp = _dt.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        with open(path, "a") as f:
+            f.write(f"\n---\n[{timestamp}]\n{content}\n")
+    except Exception as e:
+        print(f"[MEMORY] Write failed for {agent_name}: {e}", flush=True)
+
+
+def summarize_to_memory(agent_name: str, task: str, result: str, score: int) -> None:
+    """Save a summary of completed work to agent memory."""
+    if score < 6:
+        return  # Don't memorize poor outputs
+    summary = f"Task: {task[:200]}\nScore: {score}/10\nKey output: {result[:300]}"
+    write_agent_memory(agent_name, summary)

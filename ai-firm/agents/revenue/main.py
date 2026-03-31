@@ -12,7 +12,9 @@ from typing import Any, Dict
 from shared.redis_bus import enqueue, dequeue_blocking
 from shared.artifact import build_artifact
 from shared.artifact_store import stage_already_completed, mark_stage_completed
-from job_runner import submit_and_wait, extract_save_path, write_report
+from job_runner import (submit_and_wait, submit_and_wait_with_eval,
+                        extract_save_path, write_report,
+                        read_agent_memory, write_agent_memory, summarize_to_memory)
 
 AGENT_NAME  = "revenue"
 QUEUE_NAME  = "queue.agent.revenue"
@@ -117,7 +119,13 @@ def process_task(raw_envelope):
         return
 
     instruction = build_instruction(executive, identity, soul, payload)
-    result_text = submit_and_wait(AGENT_NAME, instruction)
+    # Read agent memory and inject into instruction
+    _memory = read_agent_memory(AGENT_NAME)
+    if _memory:
+        instruction = instruction + f"\n\n=== REVENUE AGENT MEMORY ===\n{_memory[:800]}\n=== END MEMORY ==="
+    
+    _task_desc = payload.get('instruction') or payload.get('message') or ''
+    result_text = submit_and_wait_with_eval(AGENT_NAME, instruction, _task_desc)
 
     save_path = extract_save_path(payload.get("instruction") or payload.get("message") or "")
     file_written = None

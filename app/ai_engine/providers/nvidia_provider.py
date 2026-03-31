@@ -37,7 +37,7 @@ class NvidiaProvider(BaseProvider):
 
         temperature = float(os.getenv("NVIDIA_TEMPERATURE", "0.7"))
         top_p = float(os.getenv("NVIDIA_TOP_P", "0.95"))
-        max_tokens = int(os.getenv("NVIDIA_MAX_TOKENS", "4096"))
+        max_tokens = int(os.getenv("NVIDIA_MAX_TOKENS", "8192"))
 
         try:
             response = self.client.chat.completions.create(
@@ -68,9 +68,12 @@ class NvidiaProvider(BaseProvider):
         tokens_output = getattr(usage, "completion_tokens", 0) if usage else 0
 
         return {
-            "output": content,
-            "provider": "nvidia",
-            "model_used": model,
-            "tokens_input": tokens_input,
-            "tokens_output": tokens_output
+            "content":       content,
+            "output":        content,
+            "provider":      "nvidia",
+            "model_used":    model,
+            "tokens_in":     tokens_input,
+            "tokens_out":    tokens_output,
+            "tokens_input":  tokens_input,
+            "tokens_output": tokens_output,
         }

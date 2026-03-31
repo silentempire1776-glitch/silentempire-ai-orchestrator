@@ -32,7 +32,7 @@ class AnthropicProvider:
 
         payload = {
             "model":      clean_model,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "messages":   user_messages,
         }
         if system_msg:

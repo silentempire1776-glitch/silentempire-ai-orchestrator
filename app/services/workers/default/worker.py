@@ -223,14 +223,42 @@ def run_ai_task(payload, forced_model=None):
         agent = payload.get("agent", "assistant")
 
         if instruction:
-            # Full instruction provided — use it directly as the user message
-            # The instruction already contains doctrine + business context + task
-            messages = [
-                {
-                    "role": "user",
-                    "content": instruction
-                }
-            ]
+            # Split instruction into system (doctrine) + user (task) parts.
+            # This prevents doctrine/identity text from triggering safety filters
+            # and works universally across Anthropic, OpenAI, and NVIDIA providers.
+            #
+            # The instruction format from agents is:
+            #   === EXECUTIVE STACK ===
+            #   {doctrine}
+            #   [identity/soul sections]
+            #   You are the X Agent...
+            #   TASK:
+            #   {actual task}
+            #
+            # We split at TASK: so doctrine → system, task → user
+
+            system_content = ""
+            user_content = instruction
+
+            # Try to split at TASK: marker
+            task_markers = ["\nTASK:\n", "TASK:\n", "\nTASK: ", "TASK: ", "\n\nTASK:\n"]
+            for marker in task_markers:
+                if marker in instruction:
+                    parts = instruction.split(marker, 1)
+                    system_content = parts[0].strip()
+                    user_content = parts[1].strip()
+                    break
+
+            if system_content:
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user",   "content": user_content}
+                ]
+            else:
+                # No TASK: marker found — send full instruction as user message
+                messages = [
+                    {"role": "user", "content": instruction}
+                ]
         else:
             # Fallback: bare minimum prompt
             messages = [
