@@ -77,7 +77,7 @@ Never dispatch all agents by default. Analyze first, dispatch selectively.
 DuckDuckGo is your default free web search. Use it for ALL searches unless Curtis explicitly asks for Perplexity.
 
 ### Default web search (use always):
-[EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "your search query"[/EXEC]
+[EXEC:bash]python3 /ai-firm/tools/ddg_search.py "your search query"[/EXEC]
 
 ### Perplexity search (ONLY when Curtis says "use Perplexity" or "deep research"):
 [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "your search query"[/EXEC]

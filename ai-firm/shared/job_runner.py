@@ -111,11 +111,33 @@ def extract_save_path(instruction: str) -> Optional[str]:
     return None
 
 
+def _enforce_naming_convention(path: str) -> str:
+    """
+    Ensure filename follows YYYY-MM-DD_HH-MM_[topic].md convention.
+    Only renames if the filename doesn't already start with a date.
+    """
+    import re
+    from datetime import datetime as _dt
+    dir_part = os.path.dirname(path)
+    filename = os.path.basename(path)
+    # Already follows convention if starts with date pattern
+    if re.match(r'\d{4}-\d{2}-\d{2}_', filename):
+        return path
+    # Strip extension, build new name
+    name_no_ext = os.path.splitext(filename)[0]
+    ext = os.path.splitext(filename)[1] or ".md"
+    timestamp = _dt.utcnow().strftime("%Y-%m-%d_%H-%M")
+    new_filename = f"{timestamp}_{name_no_ext}{ext}"
+    return os.path.join(dir_part, new_filename)
+
+
 def write_report(path: str, content: str, agent_name: str) -> bool:
     """
     Write content to path, creating directories as needed.
+    Enforces YYYY-MM-DD_HH-MM_[topic].md naming convention.
     """
     try:
+        path = _enforce_naming_convention(path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)

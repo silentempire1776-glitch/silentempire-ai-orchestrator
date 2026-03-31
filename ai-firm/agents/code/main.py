@@ -68,6 +68,52 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000").rstrip("/")
 REDIS_URL    = os.getenv("REDIS_URL", "redis://app-redis-1:6379/0")
 
 # --------------------------------------------------
+# CLAUDE CODE BRIDGE — Primary execution engine
+# Calls claude-bridge on host (port 9999)
+# Has full VPS filesystem + bash access
+# --------------------------------------------------
+
+BRIDGE_URL = "http://172.18.0.1:9999"
+
+def call_claude_code(instruction: str, work_dir: str = "/srv/silentempire") -> dict:
+    """
+    Send a task to Claude Code bridge on the host.
+    Claude Code has full VPS access — reads files, writes files, runs bash.
+    Returns {success, output, error}
+    """
+    try:
+        # Health check
+        h = _http.get(f"{BRIDGE_URL}/health", timeout=5)
+        if not h.ok:
+            return {"success": False, "output": "", "error": "Claude Code bridge not responding"}
+    except Exception as e:
+        return {"success": False, "output": "", "error": f"Cannot reach bridge: {e}"}
+
+    try:
+        r = _http.post(
+            f"{BRIDGE_URL}/run",
+            json={"prompt": instruction, "work_dir": work_dir, "timeout": 180},
+            timeout=200
+        )
+        data = r.json()
+        return {
+            "success": data.get("success", False),
+            "output": data.get("output", ""),
+            "error": "" if data.get("success") else data.get("output", "Unknown error")
+        }
+    except Exception as e:
+        return {"success": False, "output": "", "error": str(e)}
+
+
+def bridge_available() -> bool:
+    try:
+        r = _http.get(f"{BRIDGE_URL}/health", timeout=3)
+        return r.ok
+    except Exception:
+        return False
+
+
+# --------------------------------------------------
 # MCP CLIENT
 # --------------------------------------------------
 
@@ -230,16 +276,46 @@ def run_test(command: str) -> dict:
 
 def execute_code_task(task: str, context: str = "", chain_id: str = None) -> dict:
     """
-    Full autonomous code execution:
-    1. Understand what needs to be built/changed
-    2. Read existing relevant code
-    3. Generate solution
-    4. Write files
-    5. Run syntax check
-    6. Optionally restart service
-    7. Return structured result
+    Full autonomous code execution.
+    Primary path: Claude Code bridge (full VPS access).
+    Fallback: LLM-only text generation.
     """
     print(f"[CODE] Executing task: {task[:100]}", flush=True)
+
+    # PRIMARY PATH: Claude Code bridge
+    if bridge_available():
+        print("[CODE] Using Claude Code bridge for execution.", flush=True)
+        instruction = f"""You are the Code Agent for Silent Empire AI.
+
+TASK: {task}
+
+CONTEXT:
+{context or "No upstream context."}
+
+RULES:
+- Read existing files before modifying them
+- Write complete, production-ready implementations
+- Run syntax checks after writing Python files
+- Restart affected containers after deployment
+- Save any reports to /ai-firm/data/reports/code/ with dated filename YYYY-MM-DD_HH-MM_topic.md
+- Report exactly what files were written and what commands were run
+
+Execute the task completely. Do not ask for clarification."""
+
+        result = call_claude_code(instruction, work_dir="/srv/silentempire")
+        return {
+            "success":       result["success"],
+            "summary":       task[:100],
+            "task":          task,
+            "written_files": [],  # Claude Code handles internally
+            "write_errors":  [],
+            "test_result":   {},
+            "restart":       {},
+            "code_output":   result["output"][:3000],
+        }
+
+    # FALLBACK: LLM-only path (original implementation)
+    print(f"[CODE] Bridge unavailable, using LLM fallback.", flush=True)
 
     # Step 1: Plan — what files need to be read/written?
     plan_messages = [
@@ -702,24 +778,41 @@ def process_task(raw_envelope: Any) -> None:
 
     # ── OFFER STACK (chain mode) ─────────────────────────────────────
     if task_type == "offer_stack":
+        instruction_text = (
+            payload.get("instruction") or
+            payload.get("message") or
+            payload.get("target") or
+            payload.get("product") or
+            "Analyze the chain context and produce relevant code or tooling."
+        )
         upstream = payload.get("upstream_context", "")
-        if not upstream and chain_id and MCP_AVAILABLE:
-            upstream = mcp("memory", "get_chain_summary", {"chain_id": chain_id}) or ""
 
-        instruction = build_code_instruction(executive, identity, soul, {**payload, "upstream_context": upstream})
+        if bridge_available():
+            print("[CODE] offer_stack via Claude Code bridge.", flush=True)
+            bridge_instruction = f"""You are the Code Agent for Silent Empire AI.
 
-        messages = [
-            {"role": "system", "content": "You are the Code Agent. Write production code only."},
-            {"role": "user",   "content": instruction}
-        ]
-        raw_output = call_llm(messages, role="code", max_tokens=4096)
+CHAIN TASK: {instruction_text}
 
-        # Auto-write any FILE: blocks found in output
-        file_writes  = extract_file_writes(raw_output)
-        written_files = []
-        for fw in file_writes:
-            if write_file(fw["path"], fw["content"]):
-                written_files.append(fw["path"])
+UPSTREAM CONTEXT: {upstream or "None"}
+
+Execute the coding task. Write any files needed. Save reports to /ai-firm/data/reports/code/.
+Report what was built."""
+            result = call_claude_code(bridge_instruction, work_dir="/srv/silentempire")
+            raw_output = result["output"]
+            written_files = []
+        else:
+            upstream = upstream or (mcp("memory", "get_chain_summary", {"chain_id": chain_id}) or "" if chain_id and MCP_AVAILABLE else "")
+            bridge_instruction_full = build_code_instruction(executive, identity, soul, {**payload, "upstream_context": upstream})
+            messages = [
+                {"role": "system", "content": "You are the Code Agent. Write production code only."},
+                {"role": "user",   "content": bridge_instruction_full}
+            ]
+            raw_output = call_llm(messages, role="code", max_tokens=4096)
+            file_writes = extract_file_writes(raw_output)
+            written_files = []
+            for fw in file_writes:
+                if write_file(fw["path"], fw["content"]):
+                    written_files.append(fw["path"])
 
         if chain_id:
             mark_stage_completed(chain_id, AGENT_NAME)

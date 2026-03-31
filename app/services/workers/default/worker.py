@@ -217,27 +217,39 @@ def run_ai_task(payload, forced_model=None):
     # --------------------------------------
 
     if not messages:
+        instruction = payload.get("instruction", "")
         target = payload.get("target", "")
         product = payload.get("product", "")
         agent = payload.get("agent", "assistant")
 
-        messages = [
-            {
-                "role": "system",
-                "content": f"You are the {agent} agent for SilentEmpireAI."
-            },
-            {
-                "role": "user",
-                "content": f"Target audience: {target}\nProduct: {product}"
-            }
-        ]
+        if instruction:
+            # Full instruction provided — use it directly as the user message
+            # The instruction already contains doctrine + business context + task
+            messages = [
+                {
+                    "role": "user",
+                    "content": instruction
+                }
+            ]
+        else:
+            # Fallback: bare minimum prompt
+            messages = [
+                {
+                    "role": "system",
+                    "content": f"You are the {agent} agent for SilentEmpireAI."
+                },
+                {
+                    "role": "user",
+                    "content": f"Target audience: {target}\nProduct: {product}"
+                }
+            ]
 
-    # hard timeout so jobs never hang indefinitely
-    timeout = int(os.getenv("MODEL_TIMEOUT_SECONDS", "60"))
+    # Use large timeout — let active models run as long as needed.
+    # Only kills truly hung connections (5 min). Pending-stuck handled by job_runner.py.
     return run_model(
         model=model_to_use,
         messages=messages,
-        timeout=timeout
+        timeout=300
     )
 
 # ===============================
@@ -324,10 +336,23 @@ def process_job(job_id):
                 print("WARNING: No agent in payload. Defaulting to strategic_planning.")
                 agent_name = "strategic_planning"
 
-            model_name = AGENT_MODEL_MAP.get(
-                agent_name,
-                os.getenv("MODEL_JARVIS_ORCHESTRATOR", "deepseek-ai/deepseek-v3.2")
-            )
+            # Check Redis override first (set via Mission Control UI)
+            redis_override = None
+            try:
+                redis_override = redis_client.get(f"agent:model_override:{agent_name}")
+                if redis_override:
+                    redis_override = redis_override.strip()
+            except Exception:
+                pass
+
+            if redis_override:
+                model_name = redis_override
+                print(f"INTELLIGENCE ROUTING → Redis override: {model_name}")
+            else:
+                model_name = AGENT_MODEL_MAP.get(
+                    agent_name,
+                    os.getenv("MODEL_JARVIS_ORCHESTRATOR", "deepseek-ai/deepseek-v3.2")
+                )
 
         # Provider is determined by model prefix
         if model_name.startswith("claude") or model_name.startswith("anthropic/"):
@@ -354,11 +379,11 @@ def process_job(job_id):
 
         result = run_ai_task(job.payload, forced_model=model_name)
 
-        job.result = result.get("output")
+        job.result = result.get("content") or result.get("output")
         job.provider = result.get("provider")
         job.model_used = result.get("model_used")
-        job.tokens_input = result.get("tokens_input")
-        job.tokens_output = result.get("tokens_output")
+        job.tokens_input = result.get("tokens_in") or result.get("tokens_input")
+        job.tokens_output = result.get("tokens_out") or result.get("tokens_output")
 
         actual_cost = calculate_actual_cost(
             pricing,

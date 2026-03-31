@@ -5,7 +5,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_BASE    = "https://api.anthropic.com/v1"
 
 class AnthropicProvider:
-    def run(self, model: str, messages: list, timeout: int = 120) -> dict:
+    def run(self, model: str, messages: list, timeout: int = 300) -> dict:
         if not ANTHROPIC_API_KEY:
             raise Exception("ANTHROPIC_API_KEY not set")
 

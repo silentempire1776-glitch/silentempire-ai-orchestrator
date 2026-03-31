@@ -55,7 +55,7 @@ def detect_provider(model: str) -> tuple:
     return ("nvidia", model)
 
 
-def run_model(model: str, messages: list, timeout: int = 120):
+def run_model(model: str, messages: list, timeout: int = 300):
     print("RUN_MODEL CALLED WITH:", model)
 
     provider_name, clean_model = detect_provider(model)

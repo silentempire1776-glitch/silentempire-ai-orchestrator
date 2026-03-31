@@ -9,6 +9,7 @@ Usage from EXEC tag:
   python3 /ai-firm/tools/clickup_cli.py post-comment <task_id> "comment text"
   python3 /ai-firm/tools/clickup_cli.py complete-task <task_id>
   python3 /ai-firm/tools/clickup_cli.py get-comments <task_id>
+  python3 /ai-firm/tools/clickup_cli.py find-list "List Name"
 """
 
 import json, os, sys, urllib.request, urllib.error
@@ -16,18 +17,30 @@ import json, os, sys, urllib.request, urllib.error
 CLICKUP_API = "https://api.clickup.com/api/v2"
 TOKEN = os.environ.get("CLICKUP_TOKEN", "pk_198019841_HS354LOIQ9UQCUFKQKRQ5TJOIL4PFFKW")
 
-def api(method, endpoint, data=None):
+def api(method, endpoint, data=None, _retries=3, _delay=1):
+    import time
     url = f"{CLICKUP_API}{endpoint}"
     body = json.dumps(data).encode() if data else None
-    req = urllib.request.Request(url, data=body,
-          headers={"Authorization": TOKEN, "Content-Type": "application/json"},
-          method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        print(f"API Error {e.code}: {e.read().decode()[:300]}", file=sys.stderr)
-        sys.exit(1)
+    for attempt in range(_retries):
+        req = urllib.request.Request(url, data=body,
+              headers={"Authorization": TOKEN, "Content-Type": "application/json"},
+              method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode()[:300]
+            if attempt < _retries - 1 and e.code in (401, 429, 500, 502, 503, 504):
+                time.sleep(_delay * (attempt + 1))
+                continue
+            print(f"API Error {e.code}: {err_body}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            if attempt < _retries - 1:
+                time.sleep(_delay * (attempt + 1))
+                continue
+            print(f"API Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
 def get_team_id():
     r = api("GET", "/team")
@@ -93,6 +106,43 @@ def cmd_get_comments(task_id):
         text = c.get("comment_text", "")[:300]
         print(f"  @{user}: {text}")
 
+def cmd_find_list(name):
+    """Fuzzy-match a list name to its ID from live ClickUp data."""
+    import difflib
+    team_id = get_team_id()
+    spaces = api("GET", f"/team/{team_id}/space?archived=false").get("spaces", [])
+    candidates = {}
+    for s in spaces:
+        folders = api("GET", f"/space/{s['id']}/folder?archived=false").get("folders", [])
+        for fo in folders:
+            lists = api("GET", f"/folder/{fo['id']}/list?archived=false").get("lists", [])
+            for li in lists:
+                candidates[li["name"].lower()] = (li["name"], li["id"])
+        flists = api("GET", f"/space/{s['id']}/list?archived=false").get("lists", [])
+        for li in flists:
+            candidates[li["name"].lower()] = (li["name"], li["id"])
+
+    name_lower = name.lower().strip()
+
+    # Exact match
+    if name_lower in candidates:
+        orig, lid = candidates[name_lower]
+        print(f"MATCH: {orig} → {lid}")
+        return
+
+    # Fuzzy match
+    keys = list(candidates.keys())
+    matches = difflib.get_close_matches(name_lower, keys, n=3, cutoff=0.4)
+    if matches:
+        print(f"FUZZY MATCHES for '{name}':")
+        for m in matches:
+            orig, lid = candidates[m]
+            print(f"  {orig} → {lid}")
+        return
+
+    print(f"NOT FOUND: No list matching '{name}'")
+    print("Run list-all to see all available lists.")
+
 cmds = {
     "list-all": lambda a: cmd_list_all(),
     "list-tasks": lambda a: cmd_list_tasks(a[0]),
@@ -101,6 +151,7 @@ cmds = {
     "post-comment": lambda a: cmd_post_comment(a[0], a[1]),
     "complete-task": lambda a: cmd_complete_task(a[0]),
     "get-comments": lambda a: cmd_get_comments(a[0]),
+    "find-list": lambda a: cmd_find_list(a[0]),
 }
 
 if __name__ == "__main__":

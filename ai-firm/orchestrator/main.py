@@ -220,11 +220,14 @@ def dispatch(next_agent: str, task_type: str, payload: dict, doctrine: Any, chai
     # API telemetry
     step_started(chain_id, next_agent)
 
+    # Always reload doctrine fresh so file updates take effect without restart
+    fresh_doctrine = load_doctrine() or doctrine
+
     enqueue(f"queue.agent.{next_agent}", {
         "agent": next_agent,
         "task_type": task_type,
         "payload": payload,
-        "doctrine": doctrine
+        "doctrine": fresh_doctrine
     })
 
     update_chain_status(
@@ -456,13 +459,15 @@ Current time: {now}
 5. Escalate ONLY for: legal exposure, external spend, irreversible public action
 
 ## TOOLS — USE THESE EXACT COMMANDS
-Web search: [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
+Web search: [EXEC:bash]python3 /ai-firm/tools/ddg_search.py "query"[/EXEC]
 Perplexity (when asked): [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "query"[/EXEC]
+ClickUp find list ID: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py find-list "List Name"[/EXEC]
 ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
 ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
 ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment text"[/EXEC]
 ClickUp get comments: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py get-comments TASK_ID[/EXEC]
 ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
+CRITICAL: Always run find-list first to get LIST_ID — never guess or hardcode list IDs.
 ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
 Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
 Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
@@ -510,12 +515,14 @@ RULES:
 - Select only needed agents (1-3 max)
 
 TOOLS:
-Search: [EXEC:bash]python3 /ai-firm/tools/duckduckgo_search.py "query"[/EXEC]
+Search: [EXEC:bash]python3 /ai-firm/tools/ddg_search.py "query"[/EXEC]
+ClickUp find list ID: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py find-list "List Name"[/EXEC]
 ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
 ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
 ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment text"[/EXEC]
 ClickUp get comments: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py get-comments TASK_ID[/EXEC]
 ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
+CRITICAL: Always run find-list first to get LIST_ID — never guess or hardcode list IDs.
 ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
 Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
 File: [EXEC:bash]cat /ai-firm/data/reports/AGENT/file.md[/EXEC]
@@ -765,10 +772,34 @@ def call_llm_jarvis(prompt: str) -> str:
 # JARVIS AUTONOMOUS EXECUTION ENGINE
 # ==================================================
 
+def _enforce_exec_naming(command: str) -> str:
+    """
+    If a bash command writes a .md file without a date prefix,
+    rewrite the command to use the correct naming convention.
+    """
+    import re
+    from datetime import datetime as _dt
+    # Match tee, >, >> writing to a .md file
+    pattern = re.compile(r'(/[\w/.-]+/)(\w[\w.-]*\.md)')
+    def replace_path(m):
+        dir_part = m.group(1)
+        filename = m.group(2)
+        if re.match(r'\d{4}-\d{2}-\d{2}_', filename):
+            return m.group(0)  # already dated
+        timestamp = _dt.utcnow().strftime("%Y-%m-%d_%H-%M")
+        return f"{dir_part}{timestamp}_{filename}"
+    # Only apply to write operations
+    if any(op in command for op in [" > ", " >> ", "tee ", "cat >"]):
+        return pattern.sub(replace_path, command)
+    return command
+
+
 def jarvis_exec_bash(command: str, timeout: int = 30) -> str:
     """Execute a bash command autonomously and return output."""
     try:
         import subprocess
+        # Enforce naming convention on file write commands
+        command = _enforce_exec_naming(command)
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True, timeout=timeout
         )
@@ -838,7 +869,7 @@ def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) ->
         task_type = agent_task_types.get(agent.lower(), "offer_stack")
 
         # Load doctrine
-        doctrine = _load_doc(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared", "doctrine", "EXECUTIVE_STACK.md"))
+        doctrine = load_doctrine() or ""
 
         envelope = {
             "agent":      agent.lower(),
@@ -878,6 +909,8 @@ def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) ->
 def jarvis_process_exec_tags(response_text: str, chain_id: str = None) -> tuple:
     """
     Parse Jarvis response for execution tags and run them.
+    After execution, does a second LLM pass so Jarvis responds
+    based on ACTUAL tool output — never fabricated results.
     Returns (modified_response, execution_results)
 
     Tags supported:
@@ -887,21 +920,35 @@ def jarvis_process_exec_tags(response_text: str, chain_id: str = None) -> tuple:
     """
     results = []
     modified = response_text
+    has_exec = False
+
+    # Collect all tool outputs first
+    tool_outputs = []
 
     # Process [EXEC:bash] tags
     exec_pattern = re.compile(r'\[EXEC:bash\](.*?)\[/EXEC\]', re.DOTALL)
     for match in exec_pattern.finditer(response_text):
+        has_exec = True
         cmd = match.group(1).strip()
         output = jarvis_exec_bash(cmd)
+        failed = not output.startswith("(command") and (
+            output.startswith("Exit ") or
+            output.startswith("Command timed out") or
+            output.startswith("Execution error")
+        )
+        label = "FAILED" if failed else "SUCCESS"
         results.append("[bash: " + cmd[:50] + "]\n" + output)
+        tool_outputs.append(f"TOOL [{label}]\nCommand: {cmd}\nOutput:\n{output}")
         modified = modified.replace(match.group(0), "```\n$ " + cmd + "\n" + output + "\n```")
 
     # Process [EXEC:logs] tags
     logs_pattern = re.compile(r'\[EXEC:logs\](.*?)\[/EXEC\]', re.DOTALL)
     for match in logs_pattern.finditer(response_text):
+        has_exec = True
         container = match.group(1).strip()
         output = jarvis_read_logs(container)
         results.append("[logs: " + container + "]\n" + output[:500])
+        tool_outputs.append(f"TOOL [SUCCESS]\nLogs: {container}\nOutput:\n{output[:500]}")
         modified = modified.replace(match.group(0), f"``` [{container} logs] {output} ```")
 
     # Process [DISPATCH:agent] tags
@@ -911,7 +958,26 @@ def jarvis_process_exec_tags(response_text: str, chain_id: str = None) -> tuple:
         instruction = match.group(2).strip()
         result = jarvis_dispatch_agent(agent, instruction, chain_id)
         results.append("[dispatch: " + agent + "]\n" + result)
+        tool_outputs.append(f"TOOL [DISPATCH]\nAgent: {agent}\nResult: {result}")
         modified = modified.replace(match.group(0), "*[" + result + "]*")
+
+    # Second LLM pass: if any EXEC tags ran, re-synthesize response from real output
+    if has_exec and tool_outputs:
+        try:
+            tool_block = "\n\n".join(tool_outputs)
+            synthesis_prompt = f"""You just executed the following tools. Here are the REAL results:
+
+{tool_block}
+
+LAW: If any tool shows FAILED or Exit 1+, you MUST report the failure exactly. Never invent success.
+LAW: Your response must be based ONLY on the actual output above — not what you expected.
+
+Now give Curtis your final response based on these actual results. Be direct and concise."""
+            synthesized = call_llm_jarvis(synthesis_prompt)
+            if synthesized and len(synthesized) > 20:
+                return synthesized, results
+        except Exception as _syn_err:
+            print(f"[JARVIS] Synthesis pass failed: {_syn_err}", flush=True)
 
     return modified, results
 
@@ -1010,10 +1076,23 @@ def run() -> None:
             chain_started(chain_id)
 
             # Kick off first stage
+            # Resolve the actual instruction — prefer explicit instruction,
+            # fall back to product (user message), then target
+            resolved_instruction = (
+                envelope.get("instruction") or
+                envelope.get("payload", {}).get("instruction") or
+                envelope.get("payload", {}).get("message") or
+                product or
+                target or
+                ""
+            )
+
             payload = {
-                "chain_id": chain_id,
-                "target": target,
-                "product": product,
+                "chain_id":    chain_id,
+                "target":      target,
+                "product":     product,
+                "instruction": resolved_instruction,
+                "message":     resolved_instruction,
             }
 
             task_type = envelope.get("task_type") or "offer_stack"
@@ -1124,11 +1203,7 @@ def run() -> None:
                         "command": command,
                         "message": command,
                     },
-                    "doctrine": {
-                        "executive": DOCTRINE_CONTENT or "",
-                        "identity": "Systems Agent",
-                        "soul": "Precision execution. No fluff.",
-                    }
+                    "doctrine": load_doctrine() or DOCTRINE_CONTENT or ""
                 })
 
                 update_chain_status(chain_id, status="running", stage="systems", stage_started_at=now())
@@ -1236,10 +1311,15 @@ def run() -> None:
                 report_path = _save_chain_report(chain_id, topic, ceo, results_by_agent)
                 if report_path:
                     print(f"[Orchestrator] Chain report saved: {report_path}")
-                    # Save to Jarvis memory
                     _write_jarvis_memory(f"Chain completed: {topic}\nReport: {report_path}\nSummary: {ceo[:300]}")
             except Exception as _save_err:
                 print(f"[Orchestrator] Report save error: {_save_err}")
+
+            # POST CHAIN SYNTHESIS — present results to Curtis in chat
+            try:
+                _post_chain_synthesis(chain_id, results_by_agent, TARGET_BY_CHAIN.get(chain_id, ""), report_path or "")
+            except Exception as _syn_err:
+                print(f"[Orchestrator] Synthesis post error: {_syn_err}")
 
             # API telemetry: chain completed with breakdown + CEO summary
             chain_completed(chain_id, results_by_agent, ceo)
@@ -1248,6 +1328,85 @@ def run() -> None:
         dispatch(next_agent, task_type, payload, doctrine, chain_id)
 
 
+
+
+# ==================================================
+# CHAIN SYNTHESIS — Post agent results back to Curtis
+# ==================================================
+
+def _post_chain_synthesis(chain_id: str, results_by_agent: dict, topic: str, report_path: str) -> None:
+    """
+    After a chain completes, read the agent outputs and post a
+    clean synthesis to the active chat session so Curtis sees results.
+    """
+    try:
+        # Get active session
+        sess_r = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
+        if not sess_r.ok:
+            return
+        sessions = sess_r.json()
+        if not sessions:
+            return
+        session_id = sessions[0].get("id")
+        if not session_id:
+            return
+
+        # Build synthesis prompt from real agent outputs
+        agent_outputs = ""
+        for agent, output in results_by_agent.items():
+            if output and output.strip():
+                # Parse JSON report if wrapped
+                try:
+                    parsed = json.loads(output)
+                    if isinstance(parsed, dict):
+                        output = parsed.get("report") or parsed.get("summary") or parsed.get("synthesis") or output
+                except Exception:
+                    pass
+                agent_outputs += f"\n### {agent.upper()}\n{str(output)[:600]}\n"
+
+        if not agent_outputs.strip():
+            return
+
+        synthesis_prompt = f"""The following agents just completed work on this task:
+TASK: {topic}
+
+AGENT OUTPUTS:
+{agent_outputs}
+
+Your job: synthesize these outputs into a crisp executive briefing for Curtis.
+Format:
+- 2-3 sentence summary of what was accomplished
+- Key findings or deliverables from each agent (1 line each, skip agents that asked for more info)
+- 1-2 recommended next actions
+
+Be direct. No theater. If agents asked for clarification instead of executing, flag that clearly.
+Report path: {report_path}"""
+
+        synthesis = call_llm_jarvis(synthesis_prompt)
+        if not synthesis or len(synthesis) < 20:
+            return
+
+        # Post to session
+        sess_data = requests.get(f"{API_BASE_URL}/sessions/{session_id}", timeout=5)
+        if not sess_data.ok:
+            return
+        messages = sess_data.json().get("messages", [])
+
+        import uuid as _u
+        messages.append({
+            "id": str(_u.uuid4())[:8],
+            "role": "jarvis",
+            "content": f"**[Chain Complete]** {synthesis}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "mode": "jarvis",
+        })
+
+        requests.put(f"{API_BASE_URL}/sessions/{session_id}",
+            json={"messages": messages}, timeout=5)
+        print(f"[Orchestrator] Chain synthesis posted to session {session_id[:8]}")
+
+    except Exception as e:
+        print(f"[Orchestrator] _post_chain_synthesis error: {e}")
 
 
 # ==================================================
