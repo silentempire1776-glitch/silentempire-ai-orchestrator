@@ -587,12 +587,18 @@ def chat_endpoint(req: dict):
     mode = (req.get("mode") or "jarvis").strip().lower()  # "jarvis" (default) or "chain"
 
     # Common envelope fields (orchestrator expects chain_id top-level)
+    session_id = req.get("session_id") or ""
+    telegram_chat_id = req.get("telegram_chat_id") or ""
     envelope = {
         "chain_id": chain_id,
         "agent": "jarvis",
+        "session_id": session_id,
+        "telegram_chat_id": telegram_chat_id,
         "payload": {
             "message": message,
             "chain_id": chain_id,
+            "session_id": session_id,
+            "telegram_chat_id": telegram_chat_id,
         }
     }
 

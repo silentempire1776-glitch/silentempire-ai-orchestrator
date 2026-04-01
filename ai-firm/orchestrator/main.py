@@ -1195,6 +1195,13 @@ def run() -> None:
                 _topic = (msg or "").strip()[:60] or "chat"
                 TARGET_BY_CHAIN[chain_id] = _topic
                 PRODUCT_BY_CHAIN[chain_id] = msg or ""
+                # Record session_id and telegram_chat_id for mirroring
+                _sess_id = incoming_payload.get("session_id") or envelope.get("session_id") or ""
+                if _sess_id:
+                    SESSION_BY_CHAIN[chain_id] = _sess_id
+                _tg_chat = incoming_payload.get("telegram_chat_id") or envelope.get("telegram_chat_id") or ""
+                if _tg_chat:
+                    TELEGRAM_BY_CHAIN[chain_id] = _tg_chat
 
                 RESULTS_BY_CHAIN.setdefault(chain_id, {})
 
@@ -1261,6 +1268,34 @@ def run() -> None:
 
                 update_chain_status(chain_id, status="completed", stage="jarvis")
                 print(f"[Orchestrator] Jarvis chat complete | chain_id={chain_id}")
+                # Telegram direct mirror — send reply back to originating Telegram chat
+                _tg_chat_id = TELEGRAM_BY_CHAIN.get(chain_id, "")
+                if _tg_chat_id:
+                    _send_telegram_mirror(_tg_chat_id, reply)
+                # Write Jarvis reply to session so Mission Control UI shows it
+                _reply_sess = SESSION_BY_CHAIN.get(chain_id, "")
+                if _reply_sess and not _reply_sess.startswith("telegram:"):
+                    try:
+                        import uuid as _uuid_r
+                        _sr = requests.get(f"{API_BASE_URL}/sessions/{_reply_sess}", timeout=5)
+                        if _sr.ok:
+                            _sdata = _sr.json()
+                            _smsgs = _sdata.get("messages", [])
+                            if isinstance(_smsgs, str):
+                                import json as _json_r
+                                _smsgs = _json_r.loads(_smsgs)
+                            _smsgs.append({
+                                "id": str(_uuid_r.uuid4())[:8],
+                                "role": "jarvis",
+                                "content": reply,
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "mode": "jarvis",
+                            })
+                            requests.put(f"{API_BASE_URL}/sessions/{_reply_sess}",
+                                json={"messages": _smsgs}, timeout=5)
+                            print(f"[Orchestrator] Reply written to session {_reply_sess[:8]}", flush=True)
+                    except Exception as _se:
+                        print(f"[Orchestrator] Session write error: {_se}", flush=True)
                 continue
 
             # --------------------------------------------------
@@ -1420,20 +1455,52 @@ def run() -> None:
 # CHAIN SYNTHESIS — Post agent results back to Curtis
 # ==================================================
 
+def _send_telegram_mirror(chat_id: str, text: str) -> None:
+    """Send Jarvis reply back to Telegram chat."""
+    try:
+        import urllib.request as _ur, json as _j
+        token = os.getenv("TELEGRAM_TOKEN", "").strip()
+        if not token or not chat_id:
+            return
+        # Strip markdown bold markers for cleaner Telegram display
+        clean = text.replace("**", "").replace("[Chain Complete]", "").strip()
+        payload = _j.dumps({"chat_id": chat_id, "text": clean[:4000]}).encode()
+        req = _ur.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=10) as resp:
+            pass
+        print(f"[Orchestrator] Telegram mirror sent to {chat_id}", flush=True)
+    except Exception as _te:
+        print(f"[Orchestrator] Telegram mirror failed: {_te}", flush=True)
+
+
+# Track session_id per chain for Telegram mirroring
+SESSION_BY_CHAIN: Dict[str, str] = {}
+# Track originating Telegram chat_id per chain
+TELEGRAM_BY_CHAIN: Dict[str, str] = {}
+
+
 def _post_chain_synthesis(chain_id: str, results_by_agent: dict, topic: str, report_path: str) -> None:
     """
     After a chain completes, read the agent outputs and post a
     clean synthesis to the active chat session so Curtis sees results.
+    Also mirrors to Telegram if the session originated from Telegram.
     """
     try:
-        # Get active session
-        sess_r = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
-        if not sess_r.ok:
-            return
-        sessions = sess_r.json()
-        if not sessions:
-            return
-        session_id = sessions[0].get("id")
+        # Use session_id from chain if available, else get most recent session
+        session_id = SESSION_BY_CHAIN.get(chain_id, "")
+        if not session_id:
+            sess_r = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
+            if not sess_r.ok:
+                return
+            sessions = sess_r.json()
+            if not sessions:
+                return
+            session_id = sessions[0].get("id")
         if not session_id:
             return
 
@@ -1490,6 +1557,10 @@ Report path: {report_path}"""
         requests.put(f"{API_BASE_URL}/sessions/{session_id}",
             json={"messages": messages}, timeout=5)
         print(f"[Orchestrator] Chain synthesis posted to session {session_id[:8]}")
+        # Mirror to Telegram if chain originated from Telegram
+        _tg_mirror_id = TELEGRAM_BY_CHAIN.get(chain_id, "")
+        if _tg_mirror_id:
+            _send_telegram_mirror(_tg_mirror_id, synthesis)
 
     except Exception as e:
         print(f"[Orchestrator] _post_chain_synthesis error: {e}")

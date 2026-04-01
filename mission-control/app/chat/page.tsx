@@ -149,6 +149,7 @@ export default function ChatPage() {
   const [retryingId, setRetryingId]       = useState<string | null>(null)
   const bottomRef    = useRef<HTMLDivElement>(null)
   const pollRef      = useRef<NodeJS.Timeout | null>(null)
+  const livePollRef  = useRef<NodeJS.Timeout | null>(null)
   const textareaRef  = useRef<HTMLTextAreaElement>(null)
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -196,6 +197,7 @@ export default function ChatPage() {
       localStorage.setItem("jarvis_active_session", id)
       setShowSessions(false)
       if (pollRef.current) clearInterval(pollRef.current)
+      if (livePollRef.current) clearInterval(livePollRef.current)
       setLoading(false)
     } catch {}
   }
@@ -224,6 +226,32 @@ export default function ChatPage() {
   }, [messages, activeId, mounted])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
+
+  // Live polling — check session for external messages every 3s (Telegram mirror)
+  useEffect(() => {
+    if (!mounted || !activeId) return
+    if (livePollRef.current) clearInterval(livePollRef.current)
+    livePollRef.current = setInterval(async () => {
+      // Skip if a chain poll is already running (avoid conflict)
+      if (pollRef.current) return
+      try {
+        const r = await fetch(`/api/sessions/${activeId}`)
+        if (!r.ok) return
+        const s = await r.json()
+        const incoming: Message[] = (s.messages || []).map((m: any) => ({
+          ...m,
+          timestamp: m.timestamp || new Date().toISOString(),
+        }))
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id))
+          const newMsgs = incoming.filter(m => !existingIds.has(m.id))
+          if (newMsgs.length === 0) return prev
+          return [...prev, ...newMsgs]
+        })
+      } catch {}
+    }, 3000)
+    return () => { if (livePollRef.current) clearInterval(livePollRef.current) }
+  }, [mounted, activeId])
 
   const clearSession = async () => {
     if (pollRef.current) clearInterval(pollRef.current)

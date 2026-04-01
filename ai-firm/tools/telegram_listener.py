@@ -99,7 +99,65 @@ def send_reply(chat_id: str | int, text: str) -> None:
 # ── Jarvis forwarding ──────────────────────────────────────────────────────────
 
 
-def forward_to_jarvis(message: str, session_id: str | None = None) -> str:
+def get_active_session() -> str:
+    """
+    Fetch the most recently active Mission Control session ID.
+    Falls back to telegram:{chat_id} if API unreachable.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{JARVIS_API_URL}/sessions",
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            sessions = json.loads(resp.read().decode())
+            if sessions and sessions[0].get("id"):
+                return sessions[0]["id"]
+    except Exception as exc:
+        log.warning("Could not fetch active session: %s", exc)
+    return ""
+
+
+def post_message_to_session(session_id: str, role: str, text: str) -> None:
+    """
+    Append a message to the Mission Control session so it appears in the UI.
+    role: 'user' for incoming Telegram messages
+    """
+    try:
+        # Get current messages
+        req = urllib.request.Request(
+            f"{JARVIS_API_URL}/sessions/{session_id}",
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        messages = data.get("messages", [])
+        if isinstance(messages, str):
+            messages = json.loads(messages)
+        # Append new message
+        import uuid as _uuid
+        messages.append({
+            "id": str(_uuid.uuid4())[:8],
+            "role": role,
+            "content": f"[Telegram] {text}",
+            "timestamp": __import__('datetime').datetime.utcnow().isoformat(),
+        })
+        # Write back
+        payload = json.dumps({"messages": messages}).encode()
+        put_req = urllib.request.Request(
+            f"{JARVIS_API_URL}/sessions/{session_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(put_req, timeout=5) as resp:
+            pass
+        log.info("Message written to session %s", session_id)
+    except Exception as exc:
+        log.warning("Could not write to session: %s", exc)
+
+
+def forward_to_jarvis(message: str, session_id: str | None = None, telegram_chat_id: str | None = None) -> str:
     """
     POST to /chat and return the chain_id.
     Also tries /chat/client if the simple endpoint returns no useful reply.
@@ -108,6 +166,8 @@ def forward_to_jarvis(message: str, session_id: str | None = None) -> str:
     payload: dict = {"message": message}
     if session_id:
         payload["session_id"] = session_id
+    if telegram_chat_id:
+        payload["telegram_chat_id"] = telegram_chat_id
 
     try:
         resp = _post(url, payload, timeout=60)
@@ -153,9 +213,14 @@ def process_update(update: dict) -> None:
 
     # Forward to Jarvis
     try:
-        chain_id = forward_to_jarvis(text, session_id=f"telegram:{chat_id}")
-        ack = f"Received. Processing... (ref: {chain_id[:8]})" if chain_id else "Received. Processing..."
-        send_reply(chat_id, ack)
+        # Use active Mission Control session so messages appear in UI
+        active_session = get_active_session() or f"telegram:{chat_id}"
+        log.info("Using session: %s", active_session)
+        # Write incoming message to Mission Control session
+        if active_session and not active_session.startswith("telegram:"):
+            post_message_to_session(active_session, "user", text)
+        chain_id = forward_to_jarvis(text, session_id=active_session, telegram_chat_id=chat_id)
+        log.info("Forwarded to Jarvis — chain_id=%s session=%s", chain_id, active_session)
     except RuntimeError as exc:
         log.error("Jarvis forward error: %s", exc)
         send_reply(chat_id, f"Error forwarding to Jarvis: {exc}")
