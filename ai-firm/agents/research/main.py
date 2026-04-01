@@ -17,6 +17,7 @@ from shared.artifact_store import stage_already_completed, mark_stage_completed
 from job_runner import (submit_and_wait, submit_and_wait_with_eval,
                         extract_save_path, write_report,
                         read_agent_memory, write_agent_memory, summarize_to_memory)
+from config_loader import get_agent_config, get_company_name
 
 AGENT_NAME  = "research"
 QUEUE_NAME  = "queue.agent.research"
@@ -70,6 +71,9 @@ def _post_chain_event(chain_id, event, agent=None, output=None, error=None):
 
 
 def build_research_instruction(executive, identity, soul, payload):
+    _agent_cfg  = get_agent_config(AGENT_NAME)
+    role_title  = _agent_cfg.get("role_title", "Agent")
+    company_name = get_company_name()
     instruction = (
         payload.get("instruction") or
         payload.get("message") or
@@ -88,7 +92,7 @@ def build_research_instruction(executive, identity, soul, payload):
     return f"""=== EXECUTIVE STACK ===
 {executive}
 
-You are the Strategic Research Architect for Silent Empire AI.
+You are the {role_title} for {company_name}.
 
 TASK:
 {instruction}

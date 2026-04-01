@@ -30,6 +30,27 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - METRICS_PORT=8001
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - silentnet
+    restart: unless-stopped
+
+  worker-default-2:
+    build:
+      context: .
+      dockerfile: services/workers/default/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - METRICS_PORT=8002
       - MOONSHOT_API_KEY=${MOONSHOT_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}

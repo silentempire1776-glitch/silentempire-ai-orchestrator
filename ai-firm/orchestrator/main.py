@@ -444,7 +444,26 @@ ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-tas
 ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment"[/EXEC]
 ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
 Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
-DISPATCH TARGETS: research, revenue, sales, growth, legal, product, code, systems
+
+## SMART DISPATCH — SELECT 1-3 AGENTS ONLY
+Match the task to the agent. Never dispatch agents that have no role in the task.
+research → market research, data, trends, competitor analysis, reports
+revenue  → pricing, offers, monetization, LTV, financial strategy
+sales    → copy, scripts, conversion, objection handling, close sequences
+growth   → channels, funnels, paid acquisition, organic, scaling
+legal    → compliance, risk, contracts, disclaimers, jurisdiction
+product  → roadmap, features, delivery, client journey, implementation
+code     → build tools, write scripts, automation, technical implementation
+systems  → server, bash, infrastructure, deployment
+
+EXAMPLES:
+- 'Write a sales email' → sales only
+- 'Build a pricing page' → sales + revenue
+- 'Research competitors' → research only
+- 'Create a full go-to-market plan' → research + sales + growth
+- 'What are the legal risks of X' → legal only
+
+NEVER dispatch all agents. NEVER dispatch an agent unless the task requires their specialty.
 CRITICAL: ALWAYS use [EXEC:bash] tags — NEVER write plain bash commands in your response.
 CRITICAL: EXEC failure = report exact error verbatim, never invent output or fake success.
 CRITICAL: File not found = say so exactly, never invent file contents.
@@ -888,6 +907,20 @@ def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) ->
 
         # Load doctrine
         doctrine = load_doctrine() or ""
+
+        # Auto-inject save path if instruction doesn't already contain one
+        _has_path = (
+            "/ai-firm/data/reports/" in instruction
+            or "save to" in instruction.lower()
+            or "save your" in instruction.lower()
+        )
+        if not _has_path and agent.lower() not in ("systems", "code", "voice"):
+            import re as _re
+            from datetime import datetime as _dt
+            _ts = _dt.now().strftime("%Y-%m-%d_%H-%M")
+            _slug = _re.sub(r'[^a-z0-9]+', '-', instruction[:40].lower()).strip('-')
+            _save_path = f"/ai-firm/data/reports/{agent.lower()}/{_ts}_{_slug}.md"
+            instruction = instruction + f"\n\nSave your completed report to: {_save_path}"
 
         envelope = {
             "agent":      agent.lower(),

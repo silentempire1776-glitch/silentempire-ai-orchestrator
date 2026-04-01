@@ -523,7 +523,8 @@ def process_job(job_id):
 # ===============================
 
 def main():
-    start_http_server(8001)
+    _metrics_port = int(os.getenv("METRICS_PORT", "8001"))
+    start_http_server(_metrics_port)
     log_event("worker_started")
 
     while True:

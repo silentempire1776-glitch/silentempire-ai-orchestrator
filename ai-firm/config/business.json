@@ -1,0 +1,45 @@
+{
+  "company": {
+    "name": "Silent Empire AI",
+    "founder": "Curtis Proske",
+    "mission": "Build autonomous AI infrastructure that generates $1K/day \u2192 $10K/day"
+  },
+  "product": {
+    "name": "Silent Vault Trust System",
+    "tagline": "Silent Vault",
+    "description": "Irrevocable non-grantor complex discretionary spendthrift dynasty trust",
+    "purpose": "Asset protection, divorce protection, wealth preservation, legal tax optimization",
+    "delivery": "Done-with-you trust implementation service",
+    "price_range": "$5K-$25K",
+    "price_note": "Premium pricing \u2014 accessible to target demographic, inaccessible to DIY tier"
+  },
+  "market": {
+    "primary": {
+      "demographic": "35-55 yr old men making >$120k/yr who might have divorce risks",
+      "pain": "Fear of losing assets in divorce, lawsuits, or economic collapse, tired of paying high taxes",
+      "desire": "Fear of losing assets in divorce, lawsuits, or economic collapse, tired of paying high taxes",
+      "sophistication": "High \u2014 they research before buying"
+    },
+    "secondary": {
+      "demographic": "Young men 24-38, college-educated, early wealth builders wanting tax optimization & protection from relationship risks",
+      "pain": "No protection yet, don't know where to start, tired of paying high taxes",
+      "desire": "Get protected before something goes wrong"
+    }
+    "tertiary": {
+      "demographic": "High Net Worth Individuals (HNWI)",
+      "pain": "Fear of losing assets in divorce, lawsuits, or economic collapse, tired of paying high taxes",
+      "desire": "Fear of losing assets in divorce, lawsuits, or economic collapse, tired of paying high taxes"
+      "sophistication": "High \u2014 they research before buying"
+    }
+  },
+  "competitive_advantages": [
+    "AI-powered trust system \u2014 faster and cheaper than traditional attorneys",
+    "Irrevocable structure = creditor-proof and divorce-proof",
+    "Silent = operates outside of public record"
+  ],
+  "brand": {
+    "positioning": "Sovereign asset protection for high-income men",
+    "tone": "Direct, authoritative, male-coded \u2014 sovereignty, control, legacy",
+    "default_assumption": "Apply all tasks to Silent Vault Trust System by default. Never ask for product or audience clarification."
+  }
+}

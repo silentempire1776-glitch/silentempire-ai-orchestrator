@@ -15,6 +15,7 @@ from shared.artifact_store import stage_already_completed, mark_stage_completed
 from job_runner import (submit_and_wait, submit_and_wait_with_eval,
                         extract_save_path, write_report,
                         read_agent_memory, write_agent_memory, summarize_to_memory)
+from config_loader import get_agent_config, get_company_name
 
 AGENT_NAME  = "product"
 QUEUE_NAME  = "queue.agent.product"
@@ -43,6 +44,9 @@ def _as_dict(obj: Any) -> Dict:
 
 
 def build_instruction(executive, identity, soul, payload):
+    _agent_cfg  = get_agent_config(AGENT_NAME)
+    role_title  = _agent_cfg.get("role_title", "Agent")
+    company_name = get_company_name()
     instruction = (
         payload.get("instruction") or
         payload.get("message") or
@@ -62,7 +66,7 @@ def build_instruction(executive, identity, soul, payload):
 === AGENT SOUL ===
 {soul}
 
-You are the Product Architect for Silent Empire AI.
+You are the {role_title} for {company_name}.
 Deliver a professional product strategy report in markdown format.
 Cover: Core Deliverable Structure, Modules/Components, Implementation Roadmap,
 Timeline, Required Assets, Client Journey, Support Model, Risk Mitigation,
