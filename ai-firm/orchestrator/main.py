@@ -432,6 +432,24 @@ def _build_jarvis_prompt() -> str:
 {intelligence}
 --- END DOCTRINE ---
 
+--- TOOLS — USE THESE EXACT TAG FORMATS (no plain bash) ---
+Web search: [EXEC:bash]python3 /ai-firm/tools/ddg_search.py "query"[/EXEC]
+Perplexity: [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "query"[/EXEC]
+Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
+Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
+ClickUp find list: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py find-list "List Name"[/EXEC]
+ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
+ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_ID[/EXEC]
+ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
+ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment"[/EXEC]
+ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
+Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
+DISPATCH TARGETS: research, revenue, sales, growth, legal, product, code, systems
+CRITICAL: ALWAYS use [EXEC:bash] tags — NEVER write plain bash commands in your response.
+CRITICAL: EXEC failure = report exact error verbatim, never invent output or fake success.
+CRITICAL: File not found = say so exactly, never invent file contents.
+--- END TOOLS ---
+
 --- LIVE SYSTEM DATA ---
 {live}
 Current time: {now}
@@ -995,13 +1013,42 @@ PRODUCT_BY_CHAIN: Dict[str, str] = {}
 def _result_to_text(result: dict) -> str:
     """
     Convert agent result payload into a stable text output for DB.
-    Prefers result['data'] if present.
+    Extracts actual text content from known artifact data keys.
+    Falls back to json.dumps if no known key found.
     """
     data = result.get("data")
-    if isinstance(data, str):
-        return data
     if data is None:
         return ""
+    if isinstance(data, str):
+        return data
+
+    # Known keys that contain the actual agent output text — check in priority order
+    TEXT_KEYS = [
+        "report",        # research, revenue, legal, product, growth, sales
+        "code_output",   # code agent (Claude Code bridge output)
+        "summary",       # code agent fallback summary
+        "content",       # generic
+        "text",          # generic
+        "output",        # systems
+        "synthesis",     # systems direct_command
+        "strategy",      # growth, sales
+        "analysis",      # legal
+        "raw_output",    # legacy
+        "stdout",        # bash tool
+        "message",       # chat echo
+    ]
+
+    if isinstance(data, dict):
+        for key in TEXT_KEYS:
+            val = data.get(key)
+            if val and isinstance(val, str) and len(val) > 20:
+                return val
+        # No known key found — dump the dict so we at least see something
+        try:
+            return json.dumps(data, ensure_ascii=False)
+        except Exception:
+            return str(data)
+
     try:
         return json.dumps(data, ensure_ascii=False)
     except Exception:

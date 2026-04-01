@@ -42,6 +42,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -58,6 +67,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
       PYTHONPATH: /ai-firm
     volumes:
@@ -75,6 +93,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -91,6 +118,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -107,6 +143,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -123,6 +168,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -139,6 +193,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
     volumes:
       - /srv/silentempire/ai-firm:/ai-firm
@@ -280,6 +343,15 @@ services:
       - /srv/silentempire/app/.env
     environment:
       REDIS_URL: redis://app-redis-1:6379/0
+      EVAL_LOOPS_RESEARCH: "3"
+      EVAL_LOOPS_SALES: "2"
+      EVAL_LOOPS_LEGAL: "3"
+      EVAL_LOOPS_REVENUE: "2"
+      EVAL_LOOPS_GROWTH: "2"
+      EVAL_LOOPS_PRODUCT: "2"
+      EVAL_LOOPS_CODE: "4"
+      EVAL_LOOPS_SYSTEMS: "2"
+      EVAL_SCORE_THRESHOLD: "7"
       API_BASE_URL: http://api:8000
       PYTHONPATH: /ai-firm
     volumes:

@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY agents/product /app
 COPY shared /app/shared
+COPY shared/job_runner.py /app/job_runner.py
 
 ENV PYTHONPATH=/app
 
