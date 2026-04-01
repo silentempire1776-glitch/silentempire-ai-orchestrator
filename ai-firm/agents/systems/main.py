@@ -37,6 +37,7 @@ import requests as http_requests
 
 from shared.redis_bus import enqueue, dequeue_blocking
 from shared.job_submitter import submit_job
+from job_runner import submit_and_wait_with_eval, extract_save_path, write_report
 from shared.artifact import build_artifact
 from shared.artifact_store import stage_already_completed, mark_stage_completed
 
@@ -738,19 +739,17 @@ def process_task(raw_envelope):
         upstream_artifact,
     )
 
-    result = submit_job("ai_task", {
-        "instruction": instruction,
-        "agent":       AGENT_NAME,
-    })
+    _task_desc = payload.get('instruction') or payload.get('message') or ''
+    result_text = submit_and_wait_with_eval(AGENT_NAME, instruction, _task_desc)
 
-    if not result:
-        result = {"error": "empty_response"}
-
-    structured_output = build_artifact(
-        "systems_architecture",
-        "1.0",
-        {"raw_systems_strategy": result},
+    # Write file if save path present in instruction
+    save_path = extract_save_path(
+        payload.get('instruction') or payload.get('message') or ''
     )
+    file_written = None
+    if save_path and result_text:
+        if write_report(save_path, result_text, AGENT_NAME):
+            file_written = save_path
 
     if chain_id:
         mark_stage_completed(chain_id, AGENT_NAME)
@@ -758,10 +757,13 @@ def process_task(raw_envelope):
     enqueue("queue.orchestrator.results", {
         "agent":     AGENT_NAME,
         "task_type": task_type,
-        "result":    structured_output,
+        "result": build_artifact("systems_report", "2.0", {
+            "report": result_text, "file_written": file_written, "agent": AGENT_NAME,
+        }),
         "payload":   payload,
         "doctrine":  doctrine,
     })
+    print(f"[SYSTEMS] Complete. file_written={file_written}", flush=True)
     # ── END PRESERVED OFFER STACK ──────────────────────────────────
 
 

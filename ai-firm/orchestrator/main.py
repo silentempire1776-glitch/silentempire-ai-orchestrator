@@ -1187,7 +1187,9 @@ def run() -> None:
                     msg = product
 
                 # Record target/product for summary
-                TARGET_BY_CHAIN[chain_id] = "chat"
+                # Use actual message as topic (truncated) instead of generic "chat"
+                _topic = (msg or "").strip()[:60] or "chat"
+                TARGET_BY_CHAIN[chain_id] = _topic
                 PRODUCT_BY_CHAIN[chain_id] = msg or ""
 
                 RESULTS_BY_CHAIN.setdefault(chain_id, {})

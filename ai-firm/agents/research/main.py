@@ -110,6 +110,7 @@ CRITICAL — EXECUTE IMMEDIATELY:
 OUTPUT FORMAT: Clean markdown with headers.
 Structure: Executive Summary → Market Overview → Target Audience →
 Key Opportunities → Key Risks → Strategic Recommendations → Next Steps
+Do NOT add any note or disclaimer about filesystem access, file saving, or language model limitations — file saving is handled automatically by the system after you return your content.
 """.strip()
 
 def process_task(raw_envelope):

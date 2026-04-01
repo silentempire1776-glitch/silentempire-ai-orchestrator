@@ -81,6 +81,7 @@ TASK:
 
 Do NOT return JSON. Return a well-structured markdown document.
 Do NOT add preamble — start directly with the content.
+Do NOT add any note or disclaimer about filesystem access, file saving, or language model limitations — file saving is handled automatically by the system after you return your content.
 """.strip()
 
 
