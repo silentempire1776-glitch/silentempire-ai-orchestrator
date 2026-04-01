@@ -178,71 +178,119 @@ def _call_evaluator_llm(prompt: str, agent_name: str) -> str:
 
 
 # Per-agent evaluation rubrics
+# Business context loaded dynamically — no hardcoded company/product names
+def _get_business_context() -> dict:
+    """Load business context for rubrics. Falls back gracefully if config unavailable."""
+    try:
+        from config_loader import get_company_name, get_product_name
+        return {"company": get_company_name(), "product": get_product_name()}
+    except Exception:
+        return {"company": "the company", "product": "the product"}
+
 AGENT_RUBRICS = {
     "research": """Score this research report 1-10 on:
 - Specificity: Does it cite data, numbers, market sizes, statistics, or projections? (not generic statements)
 - Task completion: Does it directly address the specific research question asked?
 - Actionability: Are there concrete findings a decision-maker can act on?
-- Silent Vault relevance: Is it specific to trust/asset protection for high-income men?
+- Domain relevance: Is the content specific and relevant to the task topic and target audience?
 - Depth: Does it go beyond surface-level observations into real market dynamics?
 Deduct 3 points if it asks for more information instead of executing.
 Deduct 2 points if it uses placeholder text or templates with no real content.
 CRITICAL: Do NOT penalize specific statistics, projections, or market estimates — these are REQUIRED in strategic research.
 CRITICAL: Do NOT flag realistic market data as "fabricated" — strategic research uses industry estimates and forward projections.
-A report with specific numbers and projections should score HIGHER than a vague report without them.""",
+CRITICAL: Do NOT penalize competitive analysis reports for lacking product-specific content — competitive analysis IS the task.
+A report with specific numbers, data points, and actionable findings should score HIGHER than a vague report without them.""",
 
     "sales": """Score this sales content 1-10 on:
-- Hook quality: Does it open with a compelling, specific hook?
-- Pain agitation: Does it speak to real emotional pain (divorce, lawsuits, asset loss)?
-- Mechanism clarity: Is the Silent Vault solution explained clearly?
-- Objection handling: Are key objections addressed?
-- CTA strength: Is there a clear, specific call to action?
+- Hook quality: Does it open with a compelling, specific hook that grabs attention?
+- Pain agitation: Does it speak to real emotional pain points of the target audience?
+- Mechanism clarity: Is the product/service solution explained clearly and compellingly?
+- Objection handling: Are the key objections of the target audience addressed?
+- CTA strength: Is there a clear, specific, urgent call to action?
+- Specificity: Is the content tailored to the actual product and audience, not generic?
 Deduct 3 points if it asks for product/audience details instead of executing.
-Deduct 2 points if it is generic and not specific to Silent Vault.""",
+Deduct 2 points if it is completely generic with no audience-specific language.
+Deduct 2 points if there is no clear CTA.""",
 
     "legal": """Score this legal analysis 1-10 on:
-- Risk identification: Are specific legal risks named and explained?
-- Jurisdiction awareness: Are relevant jurisdictions mentioned?
-- Disclaimer quality: Are appropriate disclaimers present?
-- Actionability: Are specific compliance steps recommended?
-- Trust specificity: Is it specific to irrevocable non-grantor trusts?
+- Risk identification: Are specific legal risks named, categorized, and explained?
+- Jurisdiction awareness: Are relevant jurisdictions and their nuances mentioned?
+- Disclaimer quality: Are appropriate, specific disclaimers present?
+- Actionability: Are specific compliance steps and risk mitigation actions recommended?
+- Structure specificity: Is it specific to the actual product/service structure being analyzed?
+- Completeness: Does it cover regulatory, marketing, liability, and operational risks?
 Deduct 3 points if it asks for product details instead of executing.
-Deduct 2 points for generic legal boilerplate.""",
+Deduct 2 points for generic legal boilerplate with no specificity.
+Deduct 2 points if no actionable compliance recommendations are included.""",
 
     "revenue": """Score this revenue strategy 1-10 on:
-- Pricing specificity: Are actual price points recommended?
-- Offer structure: Is the core offer and value stack defined?
-- Revenue projections: Are numbers and projections included?
-- Silent Vault fit: Is it specific to premium trust services?
-- Actionability: Can this be implemented immediately?
-Deduct 3 points if it asks for product/audience details.
-Deduct 2 points if projections are missing.""",
+- Pricing specificity: Are actual price points, tiers, or ranges recommended with rationale?
+- Offer structure: Is the core offer, value stack, and upsell path defined?
+- Revenue projections: Are realistic numbers, timelines, and projections included?
+- Market fit: Is the strategy specific to the actual product and target market?
+- Actionability: Can this strategy be implemented immediately with the recommendations given?
+- LTV thinking: Is customer lifetime value and retention addressed?
+Deduct 3 points if it asks for product/audience details instead of executing.
+Deduct 2 points if projections or price points are completely missing.
+Deduct 1 point for each major revenue component missing (pricing/offer/projections/LTV).""",
 
     "growth": """Score this growth strategy 1-10 on:
-- Channel specificity: Are specific channels named (not just "social media")?
-- Target audience precision: Is the $120K+ divorced men demographic addressed?
-- Funnel clarity: Is the acquisition funnel defined?
-- Tactics: Are concrete, implementable tactics listed?
-- Metrics: Are success metrics defined?
-Deduct 3 points if it asks for product/audience details.
-Deduct 2 points for generic marketing advice.""",
+- Channel specificity: Are specific channels named with tactics (not just "use social media")?
+- Audience precision: Is the specific target demographic addressed with precision?
+- Funnel clarity: Is the full acquisition funnel defined from awareness to close?
+- Tactics: Are concrete, implementable tactics listed with expected outcomes?
+- Metrics: Are specific success metrics and KPIs defined for each channel?
+- Compounding loops: Are growth loops or referral mechanisms identified?
+Deduct 3 points if it asks for product/audience details instead of executing.
+Deduct 2 points for generic marketing advice with no channel-specific tactics.
+Deduct 2 points if no metrics or KPIs are defined.""",
 
     "product": """Score this product strategy 1-10 on:
-- Deliverable clarity: Are specific deliverables defined?
-- Implementation roadmap: Is there a concrete timeline?
-- Client journey: Is the client experience mapped?
-- Trust document specificity: Is it specific to trust products?
-- Scalability: Is the scaling model addressed?
-Deduct 3 points if it asks for product details.
-Deduct 2 points for vague deliverables.""",
+- Deliverable clarity: Are specific, concrete deliverables defined (not vague outcomes)?
+- Implementation roadmap: Is there a concrete timeline with milestones?
+- Client journey: Is the full client experience mapped from onboarding to completion?
+- Component specificity: Are modules, phases, or components clearly defined?
+- Scalability: Is the scaling model and capacity plan addressed?
+- Risk mitigation: Are delivery risks identified with mitigation plans?
+Deduct 3 points if it asks for product details instead of executing.
+Deduct 2 points for vague deliverables with no concrete specifications.
+Deduct 2 points if no implementation timeline is provided.""",
+
+    "systems": """Score this systems/infrastructure output 1-10 on:
+- Task completion: Did it complete the actual systems task assigned?
+- Technical accuracy: Are the technical recommendations correct and appropriate?
+- Specificity: Are specific tools, commands, configs, or architectures named?
+- Actionability: Can this be implemented directly from the output?
+- Safety: Does it follow safe deployment practices (backups, verification, rollback)?
+- Completeness: Are all relevant components of the system addressed?
+Deduct 4 points if it returns only a job ID or raw JSON instead of real content.
+Deduct 3 points if it asks for more information instead of executing.
+Deduct 2 points for generic infrastructure advice with no specifics.
+A systems output with actual commands, configs, or architecture decisions scores HIGHER.""",
+
+    "code": """Score this code output 1-10 on:
+- Correctness: Does the code actually solve the stated problem?
+- Completeness: Is it a complete, runnable implementation (not pseudocode or skeleton)?
+- Error handling: Are errors and edge cases handled appropriately?
+- Code quality: Is it clean, readable, and follows standard conventions?
+- Integration fit: Does it integrate properly with the existing architecture?
+- Documentation: Are key functions and logic documented with comments?
+Deduct 4 points for pseudocode or skeleton code when real code was requested.
+Deduct 3 points if it asks for clarification instead of implementing.
+Deduct 2 points for missing error handling on external calls.
+Deduct 2 points if it cannot run without significant modification.""",
 }
 
 DEFAULT_RUBRIC = """Score this agent output 1-10 on:
-- Task completion: Did it complete the assigned task?
-- Specificity: Is the output specific and actionable?
-- Quality: Is it professional and well-structured?
-- No stalling: Did it execute rather than ask for more info?
-Deduct 3 points if it asks for more information instead of executing."""
+- Task completion: Did it fully complete the assigned task without stalling?
+- Specificity: Is the output specific, concrete, and actionable (not generic)?
+- Quality: Is it professional, well-structured, and immediately usable?
+- Execution: Did it execute the task rather than ask for more information?
+- Completeness: Are all key components of the task addressed?
+Deduct 3 points if it asks for more information instead of executing.
+Deduct 2 points for generic, templated output with no task-specific content.
+Deduct 2 points if key sections of the task are missing or incomplete."""
+
 
 
 def evaluate_output(result_text: str, task: str, agent_name: str) -> dict:
@@ -253,9 +301,9 @@ def evaluate_output(result_text: str, task: str, agent_name: str) -> dict:
     rubric = AGENT_RUBRICS.get(agent_name, DEFAULT_RUBRIC)
     threshold = int(os.getenv(f"EVAL_SCORE_THRESHOLD", "7"))
 
-    prompt = f"""You are a quality evaluator for Silent Empire AI, a legitimate asset protection and trust planning company.
-Silent Vault is a legal trust system (irrevocable non-grantor trusts, SLAT dynasty trusts) that helps high-income men
-protect assets legally. This is legitimate estate planning, not fraud. Evaluate the agent output below.
+    _biz = _get_business_context()
+    prompt = f"""You are a quality evaluator for {_biz['company']}, evaluating agent output quality.
+The company delivers legitimate professional services. Evaluate the agent output below objectively.
 
 {rubric}
 

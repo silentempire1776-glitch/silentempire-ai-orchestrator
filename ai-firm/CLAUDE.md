@@ -145,6 +145,57 @@ No silent fallbacks. No fabricated success. All errors surfaced.
 
 ---
 
+## LONG-RUNNING TOOLS — SYSTEMD SERVICE PATTERN
+Any tool that runs continuously (listener, poller, monitor, bot, daemon) MUST be
+deployed as a systemd service — not just written as a script.
+
+Follow the claude-bridge pattern exactly:
+
+```ini
+[Unit]
+Description=Service description
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/silentempire/ai-firm/tools
+Environment=ENV_VAR=value
+ExecStart=/usr/bin/python3 /srv/silentempire/ai-firm/tools/your_tool.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Deploy commands:
+```bash
+# Write unit file
+cat > /etc/systemd/system/your-service.service << 'EOF'
+[unit file content]
+EOF
+
+systemctl daemon-reload
+systemctl enable your-service
+systemctl start your-service
+systemctl is-active your-service   # verify: should print "active"
+```
+
+Existing persistent services on this VPS:
+- `claude-bridge` — Claude Code HTTP bridge on port 9999
+- `telegram-listener` — Telegram bot listener, forwards to Jarvis at localhost:8000
+
+NEVER just write a script and stop. A long-running tool is not complete until it has:
+1. The Python script written and tested
+2. A systemd unit file at /etc/systemd/system/
+3. Service enabled and started
+4. Status verified as "active"
+
+---
+
 ## FORBIDDEN PATTERNS
 - with open(path, "w") on existing files → wipes to 0 bytes
 - Guessing file contents without reading first

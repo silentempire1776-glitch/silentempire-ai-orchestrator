@@ -435,7 +435,9 @@ def _build_jarvis_prompt() -> str:
 --- TOOLS — USE THESE EXACT TAG FORMATS (no plain bash) ---
 Web search: [EXEC:bash]python3 /ai-firm/tools/ddg_search.py "query"[/EXEC]
 Perplexity: [EXEC:bash]python3 /ai-firm/tools/perplexity_search.py "query"[/EXEC]
-Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
+Read file: [EXEC:bash]test -f /ai-firm/data/reports/agent/file.md && cat /ai-firm/data/reports/agent/file.md || echo "NOT FOUND"[/EXEC]
+List directory: [EXEC:bash]ls /ai-firm/tools/[/EXEC]
+CRITICAL PATH MAPPING: Inside this container, /srv/silentempire/ai-firm/ = /ai-firm/ — ALWAYS use /ai-firm/ paths in EXEC commands, NEVER /srv/silentempire/ai-firm/
 Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
 ClickUp find list: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py find-list "List Name"[/EXEC]
 ClickUp list all: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-all[/EXEC]
@@ -506,7 +508,9 @@ ClickUp get comments: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py get-comme
 ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
 CRITICAL: Always run find-list first to get LIST_ID — never guess or hardcode list IDs.
 ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
-Read file: [EXEC:bash]test -f /path/file.md && cat /path/file.md || echo "NOT FOUND"[/EXEC]
+Read file: [EXEC:bash]test -f /ai-firm/data/reports/agent/file.md && cat /ai-firm/data/reports/agent/file.md || echo "NOT FOUND"[/EXEC]
+List directory: [EXEC:bash]ls /ai-firm/tools/[/EXEC]
+CRITICAL PATH MAPPING: Inside this container, /srv/silentempire/ai-firm/ = /ai-firm/ — ALWAYS use /ai-firm/ paths in EXEC commands, NEVER /srv/silentempire/ai-firm/
 Claude Code: [EXEC:bash]python3 /ai-firm/tools/claude_code.py "instruction" --dir /target/dir[/EXEC]
 Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
 

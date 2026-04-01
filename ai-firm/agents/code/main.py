@@ -53,6 +53,7 @@ sys.path.insert(0, "/ai-firm")
 from shared.redis_bus import enqueue, dequeue_blocking
 from shared.artifact import build_artifact
 from shared.artifact_store import stage_already_completed, mark_stage_completed
+from job_runner import write_agent_memory
 
 # --------------------------------------------------
 # CONSTANTS
@@ -688,6 +689,22 @@ Then provide a deployment checklist.
 # PROCESS TASK
 # --------------------------------------------------
 
+def _save_code_memory(task: str, result: dict) -> None:
+    """Persist code task summary to agent memory."""
+    try:
+        output = result.get("code_output", "") or result.get("raw_output", "") or ""
+        success = result.get("success", False)
+        if not output and not success:
+            return
+        written = result.get("written_files", [])
+        files_note = f"Files written: {', '.join(written)}" if written else ""
+        summary = f"Task: {task[:200]}\nSuccess: {success}\n{files_note}\nOutput excerpt: {output[:300]}"
+        write_agent_memory(AGENT_NAME, summary)
+        print(f"[CODE] Memory updated.", flush=True)
+    except Exception as e:
+        print(f"[CODE] Memory write failed: {e}", flush=True)
+
+
 def process_task(raw_envelope: Any) -> None:
     envelope = _as_dict(raw_envelope)
 
@@ -735,6 +752,7 @@ def process_task(raw_envelope: Any) -> None:
             context = mcp("memory", "get_chain_summary", {"chain_id": chain_id}) or ""
 
         result = execute_code_task(task, context=context, chain_id=chain_id)
+        _save_code_memory(task, result)
 
         if chain_id:
             mark_stage_completed(chain_id, AGENT_NAME)
