@@ -1907,11 +1907,66 @@ Be direct and concise. No headers. No bullet points. Just a natural status updat
     except Exception as e:
         print(f"[PROACTIVE] Send error: {e}")
 
+# PATCH_CLICKUP_OS_THREAD
 # Start proactive thread
 _proactive_thread = _threading.Thread(target=_jarvis_proactive_loop, daemon=True, name="jarvis-proactive")
 _proactive_thread.start()
 print("[Proactive] Thread started.", flush=True)
 print("[PROACTIVE] Proactive messaging thread started (updates every 2 hours)")
+
+# ── ClickUp Business OS Scanner ───────────────────────────────────────────
+# Uses Redis lock to prevent duplicate threads across restarts
+# PATCH3_DEDUP_THREAD
+_CLICKUP_LOCK_KEY = "clickup_os:scanner_running"
+try:
+    import importlib.util as _ilu
+    import redis as _redis_check
+
+    # Check if scanner is already running (from a previous instance)
+    _rcheck = _redis_check.from_url(
+        os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+        decode_responses=True
+    )
+    # Use a short TTL — if process dies, lock expires and scanner restarts cleanly
+    _scanner_lock = _rcheck.set(_CLICKUP_LOCK_KEY, "1", ex=120, nx=True)
+
+    if _scanner_lock:
+        _cu_spec = _ilu.spec_from_file_location(
+            "clickup_scanner",
+            "/app/orchestrator/clickup_scanner.py"
+        )
+        _cu_mod = _ilu.module_from_spec(_cu_spec)
+        _cu_spec.loader.exec_module(_cu_mod)
+
+        def _clickup_loop_with_lock():
+            """Renew Redis lock while running, release on exit."""
+            try:
+                import redis as _r2
+                _rc = _r2.from_url(
+                    os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                    decode_responses=True
+                )
+                while True:
+                    _rc.expire(_CLICKUP_LOCK_KEY, 120)  # Renew every iteration
+                    import time as _t2
+                    _t2.sleep(60)
+            except Exception:
+                pass
+
+        _lock_renew = _threading.Thread(target=_clickup_loop_with_lock, daemon=True, name="clickup-lock-renew")
+        _lock_renew.start()
+
+        _clickup_thread = _threading.Thread(
+            target=_cu_mod.clickup_scan_loop,
+            daemon=True,
+            name="clickup-business-os"
+        )
+        _clickup_thread.start()
+        print("[CLICKUP_OS] Business OS scanner thread started.", flush=True)
+    else:
+        print("[CLICKUP_OS] Scanner already running in another instance — skipping.", flush=True)
+except Exception as _cu_err:
+    print(f"[CLICKUP_OS] Failed to start scanner: {_cu_err}", flush=True)
 
 
 if __name__ == "__main__":

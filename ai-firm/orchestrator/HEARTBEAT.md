@@ -84,3 +84,48 @@ TO CUSTOMIZE:
 
 ### YouTube full pipeline (search + analyze all videos on a topic):
 [EXEC:bash]python3 /ai-firm/tools/youtube_transcript.py --topic "asset protection trust divorce" --max 3[/EXEC]
+
+---
+
+## CLICKUP BUSINESS OS — HOW IT WORKS
+
+Jarvis automatically scans ClickUp every 10 minutes (configurable in autonomy_config.json).
+
+### What triggers agent dispatch:
+When Curtis posts a comment on ANY task in the monitored lists, Jarvis:
+1. Reads the full task (description + all custom fields + subtasks up to 7 levels deep)
+2. Classifies which agent should handle it
+3. Checks prerequisites (Priority Order field)
+4. Dispatches the agent with full context
+5. Posts an acknowledgment comment immediately
+6. Posts a completion comment with report path when done
+7. Updates the Deliverable and Action Items custom fields
+
+### Monitored lists (all of COMMAND CENTER + Silent Vault Launch):
+Current Sprint, Sprint Backlog, Active Blockers, 10K Roadmap,
+Competitive Intelligence, Channel Strategy, GTM Playbooks,
+Approvals Queue, Jarvis DMs, Research Vault, Lessons Learned,
+Research & Strategy, Content & Assets, Execution & Sales
+
+### How Curtis directs agents:
+Just comment on any task. Jarvis reads it and acts.
+- "Research this and give me a full competitive analysis" → research agent
+- "Write the sales copy for this offer" → sales agent
+- "Build the automation for this" → code agent
+- "Pivot — instead of X, let's do Y" → Jarvis updates memory + re-dispatches
+
+### Prerequisite enforcement:
+Tasks with Priority Order 1 = foundational, always proceed.
+Tasks with Priority Order 2+ = wait for Priority 1 tasks to be marked complete.
+Disable by setting clickup.prerequisite_enforcement: false in autonomy_config.json.
+
+### Dynamic custom fields:
+Jarvis reads ALL custom fields on every task automatically.
+Add new fields in ClickUp — Jarvis will see them on the next scan.
+No code changes needed.
+
+### Subtask depth:
+Jarvis drills down up to 7 subtask levels for full context.
+All subtask names and statuses are included in agent instructions.
+
+---

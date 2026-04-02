@@ -2,7 +2,10 @@
   "company": {
     "name": "Silent Empire AI",
     "founder": "Curtis Proske",
-    "mission": "Build autonomous AI infrastructure that generates $1K/day \u2192 $10K/day"
+    "mission": "Build autonomous AI infrastructure that generates $1K/day \u2192 $10K/day",
+    "founder_clickup_user_id": 198019841,
+    "founder_email": "silentempire1776@gmail.com",
+    "founder_name": "Curtis Proske"
   },
   "product": {
     "name": "Silent Vault Trust System",
@@ -24,11 +27,11 @@
       "demographic": "Young men 24-38, college-educated, early wealth builders wanting tax optimization & protection from relationship risks",
       "pain": "No protection yet, don't know where to start, tired of paying high taxes",
       "desire": "Get protected before something goes wrong and protect myself from creditors, lawsuits, and relationships"
-    }
+    },
     "tertiary": {
       "demographic": "High Net Worth Individuals (HNWI)",
       "pain": "Fear of losing assets in divorce, lawsuits, or economic collapse, tired of paying high taxes",
-      "desire": "Legal, bulletproof protection, tac efficiency that operates silently and invisibly"
+      "desire": "Legal, bulletproof protection, tac efficiency that operates silently and invisibly",
       "sophistication": "High \u2014 they research before buying"
     }
   },
@@ -41,5 +44,55 @@
     "positioning": "Sovereign asset protection for high-income men",
     "tone": "Direct, authoritative, male-coded \u2014 sovereignty, control, legacy",
     "default_assumption": "Apply all tasks to Silent Vault Trust System by default. Never ask for product or audience clarification."
+  },
+  "google_drive": {
+    "_note": "Edit folder IDs here when Drive structure changes. No code redeploy needed.",
+    "root_folder": "1jVVQqOQl3UYkL7FIqgxeoumhcbLeWnMx",
+    "credentials_path": "/srv/silentempire/ai-firm/config/secrets/google/credentials.json",
+    "token_path": "/srv/silentempire/ai-firm/config/secrets/google/token.json",
+    "agent_folders": {
+      "research": "19e8m0wEtMZDUzebth9FLZxnRy-FLhCBB",
+      "sales": "1GqJkdBQXiqCBEeBjaKxTOjBsFexD00My",
+      "growth": "1GqJkdBQXiqCBEeBjaKxTOjBsFexD00My",
+      "revenue": "11fMeB3tnEHXL28x-nW32aC2dnw4tmo-I",
+      "product": "11fMeB3tnEHXL28x-nW32aC2dnw4tmo-I",
+      "legal": "1AwItxc82Aol_h2RKA-NvHABZvBPtiw9W",
+      "systems": "1bk6_b9ftIWXIAnZR73FCQX7q_apwooLN",
+      "code": "1bk6_b9ftIWXIAnZR73FCQX7q_apwooLN",
+      "strategy": "1ndHYe0imrM_0l5VaJY248A0HD0rdARMY",
+      "jarvis": "1ndHYe0imrM_0l5VaJY248A0HD0rdARMY",
+      "default": "1jVVQqOQl3UYkL7FIqgxeoumhcbLeWnMx"
+    },
+    "folder_names": {
+      "19e8m0wEtMZDUzebth9FLZxnRy-FLhCBB": "02 - Research & Intelligence",
+      "1GqJkdBQXiqCBEeBjaKxTOjBsFexD00My": "04 - Marketing & Content",
+      "11fMeB3tnEHXL28x-nW32aC2dnw4tmo-I": "05 - Products & Offers",
+      "1AwItxc82Aol_h2RKA-NvHABZvBPtiw9W": "06 - Legal & Compliance",
+      "1bk6_b9ftIWXIAnZR73FCQX7q_apwooLN": "07 - Development & IT",
+      "1ndHYe0imrM_0l5VaJY248A0HD0rdARMY": "01 - Strategy & Vision",
+      "1CrrvVKNOvA36rpKJ2A38UWbetqGIycm-": "03 - Operations & Systems",
+      "1jVVQqOQl3UYkL7FIqgxeoumhcbLeWnMx": "Silent Empire (Root)"
+    }
+  },
+  "clickup": {
+    "bot_comment_prefixes": [
+      "\ud83e\udd16 Jarvis",
+      "\u2705",
+      "\u23f3",
+      "[Chain",
+      "[Morning",
+      "[Opportunity",
+      "[Status",
+      "\u2501\u2501\u2501",
+      "RESEARCH AGENT",
+      "SALES AGENT",
+      "GROWTH AGENT",
+      "REVENUE AGENT",
+      "PRODUCT AGENT",
+      "LEGAL AGENT",
+      "CODE AGENT",
+      "SYSTEMS AGENT",
+      "Jarvis received"
+    ]
   }
 }

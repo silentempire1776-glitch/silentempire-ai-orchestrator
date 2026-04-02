@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agents/legal /app
 COPY shared /app/shared
 COPY shared/job_runner.py /app/job_runner.py
+COPY shared/config_loader.py /app/config_loader.py
 
 ENV PYTHONPATH=/app
 

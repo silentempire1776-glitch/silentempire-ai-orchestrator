@@ -301,21 +301,58 @@ def run_status_update(session_id: str, cfg: dict) -> None:
 
 # ── Main heartbeat loop ───────────────────────────────────────────────────────
 
+_HEARTBEAT_RUNNING = False  # Global flag — only one heartbeat loop per process
+
 def hybrid_autonomy_loop() -> None:
     """
     Main autonomy loop. Reads config on every cycle.
     Edit autonomy_config.json — changes take effect within one heartbeat interval.
+    Includes global flag to prevent duplicate loops within same process.
     """
+    global _HEARTBEAT_RUNNING
+    if _HEARTBEAT_RUNNING:
+        print("[HEARTBEAT] Already running in this process — skipping duplicate.", flush=True)
+        return
+    _HEARTBEAT_RUNNING = True
+
     # Load config once for startup delay
     cfg = load_config()
-    startup_delay = cfg.get("intervals", {}).get("startup_delay_seconds", 120)
+    startup_delay = cfg.get("intervals", {}).get("startup_delay_seconds", 300)
     print(f"[HEARTBEAT] Autonomy engine starting. Startup delay: {startup_delay}s", flush=True)
     time.sleep(startup_delay)
 
-    # Timer tracking
-    _last_briefing   = 0.0
-    _last_opp_scan   = 0.0
-    _last_status     = 0.0
+    # PATCH4_REDIS_TIMERS
+    # Timer tracking — Redis-backed so restarts don't re-trigger immediately
+    def _load_ts(key: str) -> float:
+        """Load last-fired timestamp from Redis, default to now-minus-1-hour."""
+        try:
+            import redis as _r3
+            _rc3 = _r3.from_url(
+                os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                decode_responses=True
+            )
+            val = _rc3.get(f"heartbeat:last_fired:{key}")
+            if val:
+                return float(val)
+        except Exception:
+            pass
+        # Default: pretend it fired 1 hour ago — safe delay regardless of interval
+        return time.time() - 3600
+
+    def _save_ts(key: str, ts: float) -> None:
+        try:
+            import redis as _r4
+            _rc4 = _r4.from_url(
+                os.getenv("REDIS_URL", "redis://app-redis-1:6379/0"),
+                decode_responses=True
+            )
+            _rc4.set(f"heartbeat:last_fired:{key}", str(ts), ex=86400 * 7)
+        except Exception:
+            pass
+
+    _last_briefing   = _load_ts("briefing")
+    _last_opp_scan   = _load_ts("opp_scan")
+    _last_status     = _load_ts("status")
 
     while True:
         try:
@@ -350,6 +387,7 @@ def hybrid_autonomy_loop() -> None:
                     and (now - _last_briefing) >= briefing_sec):
                 run_morning_briefing(session_id, cfg)
                 _last_briefing = now
+                _save_ts("briefing", now)
 
             # ── Opportunity scan ───────────────────────────────────────────────
             if (cfg.get("opportunity_scan", {}).get("enabled", True)
@@ -357,6 +395,7 @@ def hybrid_autonomy_loop() -> None:
                     and (now - _last_opp_scan) >= opp_scan_sec):
                 run_opportunity_scan(session_id, cfg)
                 _last_opp_scan = now
+                _save_ts("opp_scan", now)
 
             # ── Status update ──────────────────────────────────────────────────
             if (cfg.get("status_update", {}).get("enabled", True)
@@ -364,6 +403,7 @@ def hybrid_autonomy_loop() -> None:
                     and (now - _last_status) >= status_sec):
                 run_status_update(session_id, cfg)
                 _last_status = now
+                _save_ts("status", now)
 
             # ── Sleep until next check ─────────────────────────────────────────
             time.sleep(heartbeat_sec)

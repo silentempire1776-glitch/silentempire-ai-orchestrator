@@ -1,26 +1,25 @@
 {
-  "_comment": "Silent Empire AI — Jarvis Autonomy Configuration",
+  "_comment": "Silent Empire AI \u2014 Jarvis Autonomy Configuration",
   "_comment2": "Edit this file to change Jarvis autonomous behavior. Changes take effect within 30 minutes. No redeploy needed.",
-
   "autonomy": {
     "enabled": true,
-    "mode": "full",
-    "_mode_options": ["full", "briefing_only", "passive", "off"]
+    "mode": "passive",
+    "_mode_options": [
+      "full",
+      "briefing_only",
+      "passive",
+      "off"
+    ]
   },
-
   "intervals": {
-    "heartbeat_seconds": 1800,
-    "_heartbeat_note": "How often the loop wakes up to check timers (default: 30 min)",
-    "morning_briefing_hours": 6,
-    "_briefing_note": "How often morning briefing runs (default: every 6 hours)",
-    "opportunity_scan_hours": 8,
-    "_scan_note": "How often opportunity scan runs (default: every 8 hours)",
-    "status_update_hours": 2,
-    "_status_note": "How often standard status update fires (default: every 2 hours)",
-    "startup_delay_seconds": 120,
-    "_startup_note": "How long to wait after restart before first action"
+    "heartbeat_seconds": 3600,
+    "morning_briefing_hours": 24,
+    "opportunity_scan_hours": 24,
+    "status_update_hours": 4,
+    "startup_delay_seconds": 300,
+    "clickup_scan_minutes": 15,
+    "_note": "These are conservative safe values. Increase gradually after stability confirmed."
   },
-
   "morning_briefing": {
     "enabled": true,
     "searches": [
@@ -39,7 +38,6 @@
     "deliver_to_telegram": true,
     "deliver_to_mission_control": true
   },
-
   "opportunity_scan": {
     "enabled": true,
     "searches": [
@@ -57,48 +55,103 @@
     "deliver_to_telegram": true,
     "deliver_to_mission_control": true
   },
-
   "status_update": {
     "enabled": true,
     "check_clickup": true,
     "check_new_reports": true,
     "ask_strategic_question_if_idle": true
   },
-
   "autonomous_dispatch": {
     "enabled": false,
     "_note": "Set to true to allow Jarvis to dispatch agents without being asked. Start false until memory is richer.",
     "max_tasks_per_cycle": 2,
-    "allowed_agents": ["research", "sales", "growth", "content"],
+    "allowed_agents": [
+      "research",
+      "sales",
+      "growth",
+      "content"
+    ],
     "require_memory_lines": 20,
     "_require_note": "Minimum Jarvis memory lines before autonomous dispatch activates"
   },
-
   "clickup": {
     "default_sprint_list_id": "901710993025",
     "scan_for_new_tasks": true,
     "auto_comment_on_completion": true,
     "create_tasks_from_opportunities": false,
-    "_create_note": "Set true to have Jarvis auto-create ClickUp tasks from opportunity scans"
+    "_create_note": "Set true to have Jarvis auto-create ClickUp tasks from opportunity scans",
+    "scan_interval_minutes": 15,
+    "_scan_interval_note": "How often Jarvis scans ClickUp for Curtis's comments. Edit this to change frequency.",
+    "max_subtask_depth": 7,
+    "_subtask_note": "Jarvis drills down up to 7 levels of subtasks for full context",
+    "scan_lists": {
+      "Current Sprint": "901710993025",
+      "Sprint Backlog": "901710993026",
+      "Active Blockers": "901710993027",
+      "10K Roadmap": "901710993021",
+      "Competitive Intelligence": "901710993022",
+      "Channel Strategy": "901710993023",
+      "GTM Playbooks": "901710993024",
+      "Approvals Queue": "901710993041",
+      "Jarvis DMs": "901710993042",
+      "Research Vault": "901710993034",
+      "Lessons Learned": "901710993031",
+      "Daily Pulse": "901710993040",
+      "Decision Log": "901710993035",
+      "Research & Strategy": "901711321852",
+      "Content & Assets": "901711321853",
+      "Execution & Sales": "901711321854",
+      "Hook Library": "901710992826",
+      "Video Scripts Collection": "901710992828",
+      "Cold Outreach Sequences": "901710992829",
+      "Landing Page Development": "901710992833",
+      "Email Templates": "901710992834",
+      "Social Content Calendar": "901710992835",
+      "Trust Template Funnel": "901710992864",
+      "Strategy Session Funnel": "901710992865",
+      "PROTECT Discovery Framework": "901710992867",
+      "Objection Arsenal": "901710992868",
+      "Proposal Templates": "901710992870",
+      "Client Success Protocols": "901710992871",
+      "Trust Structure Development": "901710992874",
+      "Legal Review & Compliance": "901710992875",
+      "Implementation Guides": "901710992876",
+      "Client Onboarding": "901710992877",
+      "Template Library": "901710992879",
+      "SOP Documentation": "901710992881",
+      "Pricing & Packaging": "901710993046",
+      "Revenue Tracking": "901710993047",
+      "Disclaimer Library": "901710993050",
+      "Contract Templates": "901710993051"
+    },
+    "prerequisite_enforcement": true,
+    "_prereq_note": "Set false to disable prerequisite checking (allows all tasks to dispatch regardless of priority order)",
+    "max_dispatches_per_scan": 3,
+    "chain_lock_ttl_seconds": 1800
   },
-
   "claude_code": {
     "bridge_url": "http://172.18.0.1:9999",
     "timeout_seconds": 180,
     "work_dir": "/srv/silentempire"
   },
-
   "memory": {
     "jarvis_core_path": "/srv/silentempire/ai-firm/data/memory/jarvis/core.md",
     "reports_base_path": "/srv/silentempire/ai-firm/data/reports",
     "auto_update_after_briefing": true
   },
-
   "business_context": {
     "_note": "Override these to white-label for a different client. Leave empty to read from business.json",
     "company_name": "",
     "product_name": "",
     "revenue_target_daily": 1000,
     "primary_market": "Men 35-55, $120K+/year income, asset protection"
+  },
+  "budget": {
+    "daily_usd_limit": 5.0,
+    "per_autonomy_call_model": "claude-haiku-4-5-20251001",
+    "_model_note": "Autonomy functions (briefings, scans) use Haiku. Only agent tasks use Sonnet.",
+    "circuit_breaker_queue_depth": 20,
+    "_circuit_note": "If any agent queue exceeds this, halt all autonomy dispatches",
+    "enabled": true
   }
 }
