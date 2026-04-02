@@ -580,6 +580,37 @@ Time: {now}
 """
 
 
+# PATCH7_ACTIVE_SESSION
+def _get_active_session_id() -> str:
+    """Get the most recently active session ID from the database."""
+    try:
+        resp = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
+        if resp.ok:
+            sessions = resp.json()
+            if sessions and isinstance(sessions, list):
+                # Most recently updated session
+                latest = max(sessions, key=lambda s: s.get("updated_at", ""), default=None)
+                if latest:
+                    return latest.get("id", "")
+    except Exception:
+        pass
+    return ""
+
+
+def _write_session_reply(session_id: str, message: str) -> None:
+    """Write a message to a session (for Mission Control display)."""
+    if not session_id:
+        return
+    try:
+        requests.post(
+            f"{API_BASE_URL}/sessions/{session_id}/messages",
+            json={"role": "assistant", "content": message},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"[AUTONOMY] Session write failed: {e}", flush=True)
+
+
 def _read_jarvis_memory() -> str:
     """Read Jarvis persistent memory file."""
     try:
@@ -942,7 +973,21 @@ def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) ->
             "doctrine": doctrine,
         }
 
+        # PATCH1_TELEGRAM_CHAIN_MIRROR
         r.rpush(queue, json.dumps(envelope))
+
+        # ── TELEGRAM CHAIN MIRROR — persist telegram_chat_id for this chain ──
+        # So _post_chain_synthesis can mirror the synthesis back to Telegram
+        try:
+            _tg_cid = TELEGRAM_BY_CHAIN.get(chain_id)
+            if not _tg_cid:
+                # Try to find it from active session context stored in Redis
+                _tg_key = r.get(f"telegram_chat_for_session:{_current_session_id}")
+                if _tg_key:
+                    TELEGRAM_BY_CHAIN[chain_id] = _tg_key.decode() if isinstance(_tg_key, bytes) else _tg_key
+                    print(f"[TELEGRAM_BY_CHAIN] Set chain {chain_id[:8]} → {TELEGRAM_BY_CHAIN[chain_id]}", flush=True)
+        except Exception as _tbe:
+            pass  # Non-fatal — mirror is best-effort
 
         # Post chain event so dashboard shows agent as working
         try:
@@ -1196,7 +1241,16 @@ def run() -> None:
                 TARGET_BY_CHAIN[chain_id] = _topic
                 PRODUCT_BY_CHAIN[chain_id] = msg or ""
                 # Record session_id and telegram_chat_id for mirroring
+                # PATCHA_SESS_TRACK
                 _sess_id = incoming_payload.get("session_id") or envelope.get("session_id") or ""
+                # Track active session + Telegram chat ID for chain mirror
+                if _sess_id:
+                    _tg_cid = incoming_payload.get("telegram_chat_id") or envelope.get("telegram_chat_id")
+                    if _tg_cid:
+                        try:
+                            r.set(f"telegram_chat_for_session:{_sess_id}", str(_tg_cid), ex=86400)
+                        except Exception:
+                            pass
                 if _sess_id:
                     SESSION_BY_CHAIN[chain_id] = _sess_id
                 _tg_chat = incoming_payload.get("telegram_chat_id") or envelope.get("telegram_chat_id") or ""
@@ -1575,15 +1629,178 @@ import threading as _threading
 # Global flag to prevent duplicate proactive threads
 _proactive_thread_started = False
 
+# PATCHB_AUTONOMY_ENGINE
+def _run_morning_briefing(session_id: str) -> None:
+    """Generate and deliver morning intelligence briefing via Claude Code bridge."""
+    import subprocess as _sbp
+    try:
+        print("[AUTONOMY] Running morning briefing...", flush=True)
+        date_str = __import__("datetime").datetime.now().strftime("%A, %B %d, %Y")
+        ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d_%H-%M")
+        save_path = f"/srv/silentempire/ai-firm/data/reports/research/{ts}_morning-briefing.md"
+
+        briefing_prompt = f"""Generate the morning intelligence briefing for Curtis Proske, Founder of Silent Empire AI.
+Date: {date_str}
+
+Execute these steps:
+1. Check recent reports: ls /srv/silentempire/ai-firm/data/reports/research/ 2>/dev/null | tail -5
+2. Read Jarvis memory: cat /srv/silentempire/ai-firm/data/memory/jarvis/core.md 2>/dev/null | tail -30
+3. Search market: python3 /srv/silentempire/ai-firm/tools/ddg_search.py "irrevocable trust asset protection 2026"
+4. Check chain reports: ls -t /srv/silentempire/ai-firm/data/reports/chains/*.md 2>/dev/null | head -3
+
+Write this briefing then save to {save_path}:
+
+# Morning Briefing — {date_str}
+
+## Priority Actions Today
+[3 specific, numbered actions Curtis should do TODAY — each with why it matters now]
+
+## Agent Activity (Last 24h)
+[What agents produced — specific outputs, quality scores, files written]
+
+## Market Intelligence
+[2-3 findings from search — specific, not generic]
+
+## Revenue Status
+[Honest assessment vs $1K/day target + ONE action to move revenue today]
+
+## Recommended Dispatches
+[2-3 specific agent tasks ready to run — agent name + exact instruction]
+
+Tight. Actionable. 90-second read. No fluff.
+After saving, output ONLY the briefing text for Telegram delivery."""
+
+        resp = requests.post(
+            "http://172.18.0.1:9999/run",
+            json={{"prompt": briefing_prompt, "work_dir": "/srv/silentempire", "timeout": 180}},
+            timeout=200
+        )
+        data = resp.json()
+        if data.get("success") and data.get("output"):
+            briefing_text = data["output"].strip()
+            _send_telegram_mirror(briefing_text, None)
+            # Write to session
+            try:
+                import uuid as _u2
+                msg = {{"id": str(_u2.uuid4())[:8], "role": "jarvis",
+                        "content": f"**[Morning Briefing]**\n{{briefing_text[:3000]}}",
+                        "timestamp": __import__("datetime").datetime.utcnow().isoformat(), "mode": "jarvis"}}
+                sd = requests.get(f"{{API_BASE_URL}}/sessions/{{session_id}}", timeout=5)
+                if sd.ok:
+                    ex = sd.json(); msgs = ex.get("messages", []); msgs.append(msg)
+                    requests.put(f"{{API_BASE_URL}}/sessions/{{session_id}}", json={{"messages": msgs}}, timeout=5)
+            except Exception:
+                pass
+            print("[AUTONOMY] Morning briefing delivered.", flush=True)
+        else:
+            print(f"[AUTONOMY] Briefing failed: {{data.get('output','?')[:200]}}", flush=True)
+    except Exception as _e:
+        print(f"[AUTONOMY] Morning briefing error: {{_e}}", flush=True)
+
+
+def _run_opportunity_scan(session_id: str) -> None:
+    """Autonomous opportunity scan — identifies revenue opportunities, runs 2x/day."""
+    try:
+        print("[AUTONOMY] Running opportunity scan...", flush=True)
+        ts = __import__("datetime").datetime.now().strftime("%Y-%m-%d_%H-%M")
+        save_path = f"/srv/silentempire/ai-firm/data/reports/research/{{ts}}_opportunity-scan.md"
+
+        scan_prompt = f"""You are Jarvis's autonomous intelligence module for Silent Empire AI.
+Run an opportunity scan. Execute all steps:
+
+1. python3 /srv/silentempire/ai-firm/tools/ddg_search.py "asset protection trust market demand 2026"
+2. python3 /srv/silentempire/ai-firm/tools/ddg_search.py "irrevocable trust divorce protection competitors pricing"
+3. python3 /srv/silentempire/ai-firm/tools/ddg_search.py "high income men asset protection lawsuits divorce"
+4. ls /srv/silentempire/ai-firm/data/reports/research/ | tail -5
+
+Save a focused opportunity report to: {save_path}
+
+Report format:
+# Opportunity Scan — {ts}
+## Top 3 Opportunities (act within 48 hours)
+[Each: what it is, why now, estimated revenue impact, exact agent + instruction needed]
+## Content Gaps to Fill This Week
+[Specific content the market searches for that we don't have — each as a title]
+## Competitive Weaknesses to Exploit
+[Specific gaps in competitor positioning Silent Vault can own]
+
+After saving, output ONLY a 3-bullet summary (under 200 chars/bullet) for Telegram."""
+
+        resp = requests.post(
+            "http://172.18.0.1:9999/run",
+            json={{"prompt": scan_prompt, "work_dir": "/srv/silentempire", "timeout": 180}},
+            timeout=200
+        )
+        data = resp.json()
+        if data.get("success") and data.get("output"):
+            summary = data["output"].strip()
+            msg_text = f"🔍 Opportunity Scan\n\n{{summary[:1500]}}"
+            _send_telegram_mirror(msg_text, None)
+            try:
+                import uuid as _u3
+                msg = {{"id": str(_u3.uuid4())[:8], "role": "jarvis",
+                        "content": msg_text,
+                        "timestamp": __import__("datetime").datetime.utcnow().isoformat(), "mode": "jarvis"}}
+                sd = requests.get(f"{{API_BASE_URL}}/sessions/{{session_id}}", timeout=5)
+                if sd.ok:
+                    ex = sd.json(); msgs = ex.get("messages", []); msgs.append(msg)
+                    requests.put(f"{{API_BASE_URL}}/sessions/{{session_id}}", json={{"messages": msgs}}, timeout=5)
+            except Exception:
+                pass
+            print("[AUTONOMY] Opportunity scan complete.", flush=True)
+        else:
+            print(f"[AUTONOMY] Scan failed: {{data.get('output','?')[:200]}}", flush=True)
+    except Exception as _e:
+        print(f"[AUTONOMY] Opportunity scan error: {{_e}}", flush=True)
+
+
 def _jarvis_proactive_loop():
-    """Background thread: proactive COO actions every 2 hours."""
+    """Background thread: morning briefing, opportunity scan, proactive updates — elite autonomy."""
     global _proactive_thread_started
     import time as _time
-    _time.sleep(120)  # Wait 2 min after startup before first message
+    _time.sleep(120)  # Wait 2 min after startup before first action
+
+    # Interval tracking
+    _last_status      = 0
+    _last_briefing    = 0
+    _last_opp_scan    = 0
+    STATUS_INTERVAL   = 7200   # 2 hours
+    BRIEFING_INTERVAL = 21600  # 6 hours
+    OPP_SCAN_INTERVAL = 28800  # 8 hours
+
+    print("[AUTONOMY] Heartbeat interval set to 1800 seconds", flush=True)
+
     while True:
         try:
-            _time.sleep(7200)  # Every 2 hours
-            _send_proactive_update()
+            _time.sleep(1800)  # Check every 30 minutes
+            _now = _time.time()
+
+            # Get active session for all autonomy functions
+            _active_session = ""
+            try:
+                _sr = requests.get(f"{API_BASE_URL}/sessions", timeout=5)
+                if _sr.ok:
+                    _sessions = _sr.json()
+                    if _sessions:
+                        _active_session = _sessions[0].get("id", "")
+            except Exception:
+                pass
+
+            # Morning briefing (every 6 hours)
+            if _active_session and (_now - _last_briefing) >= BRIEFING_INTERVAL:
+                _run_morning_briefing(_active_session)
+                _last_briefing = _now
+
+            # Opportunity scan (every 8 hours)
+            if _active_session and (_now - _last_opp_scan) >= OPP_SCAN_INTERVAL:
+                _run_opportunity_scan(_active_session)
+                _last_opp_scan = _now
+
+            # Standard proactive status update (every 2 hours)
+            if (_now - _last_status) >= STATUS_INTERVAL:
+                _send_proactive_update()
+                _last_status = _now
+
         except Exception as _pe:
             print(f"[PROACTIVE] Error: {_pe}")
 

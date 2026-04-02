@@ -1,0 +1,104 @@
+{
+  "_comment": "Silent Empire AI — Jarvis Autonomy Configuration",
+  "_comment2": "Edit this file to change Jarvis autonomous behavior. Changes take effect within 30 minutes. No redeploy needed.",
+
+  "autonomy": {
+    "enabled": true,
+    "mode": "full",
+    "_mode_options": ["full", "briefing_only", "passive", "off"]
+  },
+
+  "intervals": {
+    "heartbeat_seconds": 1800,
+    "_heartbeat_note": "How often the loop wakes up to check timers (default: 30 min)",
+    "morning_briefing_hours": 6,
+    "_briefing_note": "How often morning briefing runs (default: every 6 hours)",
+    "opportunity_scan_hours": 8,
+    "_scan_note": "How often opportunity scan runs (default: every 8 hours)",
+    "status_update_hours": 2,
+    "_status_note": "How often standard status update fires (default: every 2 hours)",
+    "startup_delay_seconds": 120,
+    "_startup_note": "How long to wait after restart before first action"
+  },
+
+  "morning_briefing": {
+    "enabled": true,
+    "searches": [
+      "irrevocable trust asset protection news 2026",
+      "divorce asset protection high income men",
+      "dynasty trust competitor market 2026"
+    ],
+    "sections": [
+      "Priority Actions Today",
+      "Agent Activity (Last 24h)",
+      "Market Intelligence",
+      "Revenue Status vs $1K/day target",
+      "Recommended Agent Dispatches"
+    ],
+    "max_length_chars": 3000,
+    "deliver_to_telegram": true,
+    "deliver_to_mission_control": true
+  },
+
+  "opportunity_scan": {
+    "enabled": true,
+    "searches": [
+      "asset protection trust market demand 2026",
+      "irrevocable trust divorce protection competitors pricing",
+      "high income men asset protection lawsuit creditor",
+      "dynasty trust tax optimization strategies 2026"
+    ],
+    "output_sections": [
+      "Top 3 Opportunities (act within 48 hours)",
+      "Content Gaps to Fill This Week",
+      "Competitive Weaknesses to Exploit",
+      "Recommended ClickUp Tasks to Create"
+    ],
+    "deliver_to_telegram": true,
+    "deliver_to_mission_control": true
+  },
+
+  "status_update": {
+    "enabled": true,
+    "check_clickup": true,
+    "check_new_reports": true,
+    "ask_strategic_question_if_idle": true
+  },
+
+  "autonomous_dispatch": {
+    "enabled": false,
+    "_note": "Set to true to allow Jarvis to dispatch agents without being asked. Start false until memory is richer.",
+    "max_tasks_per_cycle": 2,
+    "allowed_agents": ["research", "sales", "growth", "content"],
+    "require_memory_lines": 20,
+    "_require_note": "Minimum Jarvis memory lines before autonomous dispatch activates"
+  },
+
+  "clickup": {
+    "default_sprint_list_id": "901710993025",
+    "scan_for_new_tasks": true,
+    "auto_comment_on_completion": true,
+    "create_tasks_from_opportunities": false,
+    "_create_note": "Set true to have Jarvis auto-create ClickUp tasks from opportunity scans"
+  },
+
+  "claude_code": {
+    "bridge_url": "http://172.18.0.1:9999",
+    "timeout_seconds": 180,
+    "work_dir": "/srv/silentempire"
+  },
+
+  "memory": {
+    "jarvis_core_path": "/srv/silentempire/ai-firm/data/memory/jarvis/core.md",
+    "reports_base_path": "/srv/silentempire/ai-firm/data/reports",
+    "auto_update_after_briefing": true
+  },
+
+  "business_context": {
+    "_note": "Override these to white-label for a different client. Leave empty to read from business.json",
+    "company_name": "",
+    "product_name": "",
+    "revenue_target_daily": 1000,
+    "primary_market": "Men 35-55, $120K+/year income, asset protection"
+  }
+}

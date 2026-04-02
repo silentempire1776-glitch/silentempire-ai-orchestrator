@@ -275,18 +275,52 @@ def run_test(command: str) -> dict:
 # reads relevant code, writes solution, optionally deploys
 # --------------------------------------------------
 
-def execute_code_task(task: str, context: str = "", chain_id: str = None) -> dict:
+# PATCH4_PROMPT_REGISTRY
+def execute_code_task(task: str, context: str = "", chain_id: str = None, task_type_hint: str = None) -> dict:
     """
     Full autonomous code execution.
-    Primary path: Claude Code bridge (full VPS access).
+    Primary path: Claude Code bridge (full VPS access) with elite prompt registry.
     Fallback: LLM-only text generation.
     """
     print(f"[CODE] Executing task: {task[:100]}", flush=True)
 
-    # PRIMARY PATH: Claude Code bridge
+    # PRIMARY PATH: Claude Code bridge with elite prompt registry
     if bridge_available():
         print("[CODE] Using Claude Code bridge for execution.", flush=True)
-        instruction = f"""You are the Code Agent for Silent Empire AI.
+
+        # Try to get an elite structured prompt from the registry
+        try:
+            import sys as _sys
+            _sys.path.insert(0, "/srv/silentempire/ai-firm/shared")
+            _sys.path.insert(0, "/srv/silentempire/ai-firm/tools")
+            # prompt_registry lives in /ai-firm/shared/prompt_registry.py on host
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "prompt_registry",
+                "/ai-firm/shared/prompt_registry.py"
+            )
+            _pr = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_pr)
+            if task_type_hint and task_type_hint in _pr.list_available():
+                instruction = _pr.get_prompt(task_type_hint, {"instruction": task, "topic": task})
+                print(f"[CODE] Using registry prompt: {task_type_hint}", flush=True)
+            else:
+                # Use preamble + task for unregistered types
+                preamble = _pr.get_preamble()
+                instruction = f"""{preamble}
+
+=== TASK ===
+{task}
+
+CONTEXT:
+{context or "No upstream context."}
+
+Execute completely. Read existing files before modifying. Save reports to /srv/silentempire/ai-firm/data/reports/code/.
+Report exactly what files were written and what commands were run."""
+                print("[CODE] Using preamble + task (no registry match).", flush=True)
+        except Exception as _pe:
+            print(f"[CODE] Prompt registry unavailable ({_pe}), using default prompt.", flush=True)
+            instruction = f"""You are the Code Agent for Silent Empire AI.
 
 TASK: {task}
 
@@ -298,7 +332,7 @@ RULES:
 - Write complete, production-ready implementations
 - Run syntax checks after writing Python files
 - Restart affected containers after deployment
-- Save any reports to /ai-firm/data/reports/code/ with dated filename YYYY-MM-DD_HH-MM_topic.md
+- Save any reports to /srv/silentempire/ai-firm/data/reports/code/ with dated filename YYYY-MM-DD_HH-MM_topic.md
 - Report exactly what files were written and what commands were run
 
 Execute the task completely. Do not ask for clarification."""
@@ -554,13 +588,15 @@ Maximum 5 tasks. Be specific about file paths."""
     for r in results:
         all_written.extend(r.get("written_files", []))
 
-    return {
+    build_result = {
         "success":       any(r.get("success") for r in results),
         "feature":       spec[:200],
         "tasks_executed": len(results),
         "written_files": all_written,
         "task_results":  results,
     }
+    _save_code_memory(spec, build_result)
+    return build_result
 
 
 # --------------------------------------------------
@@ -606,9 +642,11 @@ Return findings as JSON:
         clean = raw.strip()
         if clean.startswith("```"):
             clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0]
-        return json.loads(clean)
+        review_result = json.loads(clean)
     except Exception:
-        return {"raw_review": raw, "path": path}
+        review_result = {"raw_review": raw, "path": path}
+    _save_code_memory(f"code_review:{path}", review_result)
+    return review_result
 
 
 # --------------------------------------------------
@@ -650,7 +688,7 @@ def build_code_instruction(executive: str, identity: str, soul: str, payload: di
     product = payload.get("product", "")
     upstream = payload.get("upstream_context", "")
 
-    return f"""\n{SUPERPOWERS_CONTEXT}\n"""  # Skills injected
+    # PATCH1_DEAD_RETURN_FIXED
     return f"""
 === EXECUTIVE STACK ===
 {executive}

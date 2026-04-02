@@ -118,9 +118,13 @@ services:
     build:
       context: /srv/silentempire/mission-control
     container_name: mission-control
+    command: sh -c "npm run build && npm run start"
+
     restart: unless-stopped
     environment:
       - JARVIS_PASSWORD=Money001/
+      - TELEGRAM_TOKEN=8465168605:AAFvM00PbcyV-MpaHjCyBvVO6Jdui-jDH6w
+      - TELEGRAM_CHAT_ID=889762776
     volumes:
       - /srv/silentempire/mission-control:/app
     networks:

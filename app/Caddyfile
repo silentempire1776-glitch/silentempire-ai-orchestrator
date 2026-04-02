@@ -4,6 +4,10 @@ api.silentempireai.com {
 
 jarvis.silentempireai.com {
 
+    handle /api/telegram-send {
+        reverse_proxy mission-control:3000
+    }
+
     handle /api/* {
         uri strip_prefix /api
         reverse_proxy app-api-1:8000

@@ -235,7 +235,7 @@ export default function ChatPage() {
       // Skip if a chain poll is already running (avoid conflict)
       if (pollRef.current) return
       try {
-        const r = await fetch(`/api/sessions/${activeId}`)
+        const r = await fetch(`/api/sessions/${activeId}?t=${Date.now()}`, { cache: "no-store" })
         if (!r.ok) return
         const s = await r.json()
         const incoming: Message[] = (s.messages || []).map((m: any) => ({
@@ -394,6 +394,12 @@ export default function ChatPage() {
           clearInterval(pollRef.current!)
           setMessages(p => p.map(m => m.id === thinkingId ? { ...m, thinking: false, content: reply, role: "jarvis" } : m))
           setLoading(false)
+          // Forward Jarvis reply to Telegram
+          fetch("/api/telegram-send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: `[Jarvis] ${reply.slice(0, 4000)}` }),
+          }).catch(() => {})
         } else if (n >= 90) {
           clearInterval(pollRef.current!)
           setMessages(p => p.map(m => m.id === thinkingId ? { ...m, thinking: false, content: "No response. Please try again.", role: "error" } : m))
@@ -433,10 +439,17 @@ export default function ChatPage() {
         body: JSON.stringify({
           message: text,
           mode,
+          session_id: activeId,
           ...(attachedImage ? { image_b64: attachedImage.b64, image_type: attachedImage.type, image_name: attachedImage.name } : {})
         }),
       })
       const d = await r.json()
+      // Forward Mission Control message to Telegram
+      fetch("/api/telegram-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: `[Mission Control] ${text}` }),
+      }).catch(() => {})
       poll(d.chain_id, thinkId, mode)
     } catch {
       setMessages(p => p.map(m => m.id === thinkId ? { ...m, thinking: false, content: "Connection error.", role: "error" } : m))
