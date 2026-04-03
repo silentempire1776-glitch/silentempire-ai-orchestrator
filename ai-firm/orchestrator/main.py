@@ -739,6 +739,7 @@ def call_llm_jarvis(prompt: str) -> str:
                 r.raise_for_status()
                 data = r.json()
                 content = data.get("content", [{}])[0].get("text", "").strip()
+                # PATCH_JARVIS_COST_TRACKING
                 if content:
                     print(f"[JARVIS_CHAT] Using Anthropic: {model}", flush=True)
                     try:
@@ -746,11 +747,41 @@ def call_llm_jarvis(prompt: str) -> str:
                         ti  = int(usage.get("input_tokens", 0) or 0)
                         to_ = int(usage.get("output_tokens", 0) or 0)
                         if ti or to_:
+                            # Calculate real cost from provider_pricing table
+                            _cost = 0.0
+                            try:
+                                _pr = requests.get(
+                                    f"{API_BASE_URL}/metrics/models/summary",
+                                    timeout=2
+                                )
+                                # Fallback: use known Anthropic pricing
+                                _pricing = {
+                                    "claude-sonnet-4-6": (0.003, 0.015),
+                                    "claude-haiku-4-5-20251001": (0.00025, 0.00125),
+                                    "claude-opus-4-6": (0.015, 0.075),
+                                    "claude-sonnet-4-5": (0.003, 0.015),
+                                }
+                                _model_key = model.lower()
+                                _in_price, _out_price = _pricing.get(_model_key, (0.003, 0.015))
+                                _cost = (ti / 1000 * _in_price) + (to_ / 1000 * _out_price)
+                            except Exception:
+                                _cost = (ti / 1000 * 0.003) + (to_ / 1000 * 0.015)
                             requests.post(f"{API_BASE_URL}/metrics/llm/record",
                                 json={"agent": "jarvis", "model": model, "provider": "anthropic",
                                       "tokens_in": ti, "tokens_out": to_,
-                                      "tokens_total": ti + to_, "cost_usd": 0.0},
+                                      "tokens_total": ti + to_, "cost_usd": round(_cost, 8)},
                                 timeout=2)
+                            # Also record in jobs table for budget tracking
+                            try:
+                                requests.post(f"{API_BASE_URL}/jobs",
+                                    json={
+                                        "type": "jarvis_chat",
+                                        "payload": {"agent": "jarvis", "model": model},
+                                    },
+                                    timeout=2
+                                )
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     return _process_content(content)

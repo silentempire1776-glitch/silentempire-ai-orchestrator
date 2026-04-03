@@ -295,6 +295,402 @@ def get_job(job_id: str):
     finally:
         db.close()
 
+# KANBAN_API_S7H
+
+# ══════════════════════════════════════════════════════════════════════════════
+# KANBAN BOARD API — Job intelligence for Mission Control
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/kanban/queues")
+def get_queue_depths():
+    """Live Redis queue depths for all agent queues."""
+    queues = [
+        "queue:orchestrator", "queue.orchestrator.results",
+        "queue.agent.research", "queue.agent.revenue", "queue.agent.sales",
+        "queue.agent.growth", "queue.agent.legal", "queue.agent.product",
+        "queue.agent.systems", "queue.agent.code", "queue.agent.voice",
+        "queue.agent.research.retry", "queue.agent.revenue.retry",
+        "queue.agent.sales.retry", "queue.agent.growth.retry",
+        "queue:dead",
+    ]
+    depths = {}
+    for q in queues:
+        try:
+            depths[q] = redis_client.llen(q)
+        except Exception:
+            depths[q] = 0
+    from datetime import datetime as _d; return {"queues": depths, "timestamp": _d.utcnow().isoformat()}
+
+
+@app.get("/kanban/cards")
+def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: bool = True):
+    """
+    Return enriched job cards for the kanban board.
+    Joins jobs with chain_steps and mcp_llm_calls for full context.
+    """
+    db = SessionLocal()
+    try:
+        from sqlalchemy import text as _text
+        
+        # Base query — recent jobs with cost data
+        archive_filter = "AND j.status != 'archived'" if exclude_archived and not status else ""
+        status_filter = "AND j.status = :status" if status else ""
+        query = f"""
+            SELECT 
+                j.id,
+                j.status,
+                j.type,
+                j.model_used,
+                j.tokens_input,
+                j.tokens_output,
+                j.estimated_cost_usd,
+                j.payload,
+                j.result,
+                j.error_message,
+                j.retry_count,
+                j.started_at,
+                j.completed_at,
+                j.created_at,
+                j.updated_at
+            FROM jobs j
+            WHERE j.created_at >= NOW() - INTERVAL '90 days'
+            {archive_filter}
+            {status_filter}
+            ORDER BY j.created_at DESC
+            LIMIT :limit
+        """
+        query = query.replace("{archive_filter}", archive_filter)
+        params = {"limit": limit}
+        if status:
+            params["status"] = status
+            
+        rows = db.execute(_text(query), params).fetchall()
+        
+        # Get chain context — match jobs to chain_steps by payload chain_id
+        # and get agent name from chain_steps
+        chain_query = """
+            SELECT 
+                cs.chain_id::text,
+                cs.agent,
+                cs.status as step_status,
+                cs.started_at as step_started,
+                cs.completed_at as step_completed,
+                cs.meta,
+                cr.target,
+                cr.ceo_summary
+            FROM chain_steps cs
+            LEFT JOIN chain_runs cr ON cr.id = cs.chain_id
+            WHERE cs.created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY cs.created_at DESC
+        """
+        chain_rows = db.execute(_text(chain_query)).fetchall()
+        
+        # Build chain lookup by chain_id
+        chains_by_id = {}
+        for cr in chain_rows:
+            cid = cr[0]
+            if cid not in chains_by_id:
+                chains_by_id[cid] = []
+            chains_by_id[cid].append({
+                "agent": cr[1],
+                "step_status": cr[2],
+                "step_started": cr[3].isoformat() if cr[3] else None,
+                "step_completed": cr[4].isoformat() if cr[4] else None,
+                "meta": cr[5] or {},
+                "target": cr[6],
+                "ceo_summary": (cr[7] or "")[:300] if cr[7] else None,
+            })
+        
+        # Get eval loop data from mcp_llm_calls (quality scores)
+        eval_query = """
+            SELECT 
+                m.id::text,
+                m.agent,
+                m.model,
+                m.tokens_in,
+                m.tokens_out,
+                m.cost_usd,
+                m.created_at,
+                m.metadata
+            FROM mcp_llm_calls m
+            WHERE m.created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY m.created_at DESC
+            LIMIT 500
+        """
+        try:
+            eval_rows = db.execute(_text(eval_query)).fetchall()
+        except Exception:
+            eval_rows = []
+        
+        # Build cards
+        cards = []
+        for row in rows:
+            job_id     = str(row[0])
+            status_val = row[1]
+            job_type   = row[2]
+            model      = row[3] or ""
+            tok_in     = row[4] or 0
+            tok_out    = row[5] or 0
+            cost       = row[6] or 0.0
+            payload    = row[7] or {}
+            result     = row[8] or {}
+            error_msg  = row[9]
+            retry_cnt  = row[10] or 0
+            started    = row[11]
+            completed  = row[12]
+            created    = row[13]
+            updated    = row[14]
+            
+            # Extract from payload
+            agent      = payload.get("agent", "")
+            chain_id   = (payload.get("chain_id") or 
+                         payload.get("payload", {}).get("chain_id", "") 
+                         if isinstance(payload, dict) else "")
+            instruction = ""
+            if isinstance(payload, dict):
+                # Try nested payload first (agent envelope structure)
+                inner_p = payload.get("payload", {}) or {}
+                if isinstance(inner_p, str):
+                    try:
+                        import json as _j2; inner_p = _j2.loads(inner_p)
+                    except Exception: inner_p = {}
+                # Get instruction from multiple possible locations
+                # For ai_task jobs, content is in messages array
+                _msgs = payload.get("messages", [])
+                _user_msg = ""
+                if isinstance(_msgs, list):
+                    for _m in _msgs:
+                        if isinstance(_m, dict) and _m.get("role") == "user":
+                            _user_msg = str(_m.get("content", ""))[:500]
+                            break
+                raw_instr = (
+                    inner_p.get("instruction") or
+                    inner_p.get("message") or
+                    inner_p.get("target") or
+                    payload.get("instruction") or
+                    payload.get("message") or
+                    payload.get("target") or
+                    payload.get("prompt") or
+                    _user_msg or ""
+                )
+                # Strip doctrine headers — extract actual task
+                import re as _re2
+                raw_str = str(raw_instr)
+                # Split on === blocks and take last non-empty segment
+                # Split on === blocks and find actual task content
+                parts = _re2.split(r'={3,}', raw_str)
+                skip_headers = {
+                    'EXECUTIVE STACK', 'AGENT IDENTITY', 'AGENT SOUL',
+                    'SUPERPOWERS SKILL', 'UPSTREAM', 'END DOCTRINE',
+                    'STRATEGIC DOCTRINE', 'TOOLS', 'LIVE DATA',
+                    'AGENT SOUL', 'USER', 'HEARTBEAT',
+                }
+                meaningful = []
+                for p in parts:
+                    stripped = p.strip()
+                    if not stripped or len(stripped) < 15:
+                        continue
+                    first_line = stripped.split('\n')[0].strip()
+                    if first_line in skip_headers:
+                        continue
+                    if stripped.startswith('{}\n'):
+                        stripped = stripped[3:].strip()
+                    if len(stripped) > 15:
+                        meaningful.append(stripped)
+                if meaningful:
+                    clean_instr = meaningful[-1][:300]
+                else:
+                    clean_instr = _re2.sub(r'\{\}\s*', '', raw_str).strip()[:300]
+                # Try to extract ClickUp task name + description (highest signal)
+                _cu_task = ""
+                _cu_name_m = _re2.search(r'CLICKUP TASK:\s*(.+?)\n', raw_str)
+                _cu_desc_m = _re2.search(r'TASK DESCRIPTION:\s*([\s\S]+?)(?:\n\n|CURTIS|YOUR MISSION)', raw_str)
+                if _cu_name_m:
+                    _cu_task = _cu_name_m.group(1).strip()
+                    if _cu_desc_m:
+                        _cu_task += " — " + _cu_desc_m.group(1).strip()[:150]
+                if _cu_task:
+                    # Clean Curtis direction noise from description
+                    _cu_task = _re2.sub(
+                        r"\s*—\s*CURTIS'S DIRECTION:[\s\S]*", "", _cu_task
+                    ).strip()
+                    instruction = _cu_task[:300]
+                else:
+                    # Final cleanup of best segment
+                    clean_instr = _re2.sub(r'Your previous attempt scored \d+/10[^\n]*\n?', '', clean_instr)
+                    clean_instr = _re2.sub(r'Here is the evaluator feedback:\s*', '📊 Eval: ', clean_instr)
+                    instruction = clean_instr.strip()
+            
+            # Extract ClickUp data from payload
+            clickup_task_id   = ""
+            clickup_task_name = ""
+            clickup_priority  = ""
+            if isinstance(payload, dict):
+                inner = payload.get("payload", {})
+                if isinstance(inner, dict):
+                    clickup_task_id   = inner.get("clickup_task_id", "")
+                    clickup_task_name = inner.get("clickup_task_name", "")
+                    clickup_priority  = inner.get("clickup_priority", "")
+
+            # Extract report path and Google Doc URL from result
+            report_path = ""
+            gdrive_url  = ""
+            quality_score = None
+            eval_loops    = 0
+            result_summary = ""
+            if isinstance(result, dict):
+                report_path   = result.get("file_path") or result.get("report_path") or ""
+                gdrive_url    = result.get("gdrive_url") or result.get("google_doc_url") or ""
+                quality_score = result.get("quality_score") or result.get("score")
+                eval_loops    = result.get("eval_loops") or result.get("loop_count") or 0
+                result_summary = (result.get("summary") or result.get("content") or "")[:400]
+            
+            # Try to extract from result content text
+            if isinstance(result, dict) and "content" in result:
+                content_text = str(result.get("content", ""))
+                if "score=" in content_text:
+                    import re
+                    m = re.search(r'score=(\d+)', content_text)
+                    if m:
+                        quality_score = int(m.group(1))
+                if "loop" in content_text.lower():
+                    m2 = re.search(r'[Ll]oop\s+(\d+)', content_text)
+                    if m2:
+                        eval_loops = int(m2.group(1))
+            
+            # Chain context
+            chain_steps = chains_by_id.get(chain_id, []) if chain_id else []
+            chain_target = chain_steps[0]["target"] if chain_steps else ""
+            chain_summary = chain_steps[0]["ceo_summary"] if chain_steps else ""
+            
+            # Map status to kanban column
+            kanban_col = {
+                "pending":   "queue",
+                "running":   "in_progress", 
+                "completed": "done",
+                "failed":    "failed",
+                "cancelled": "failed",
+            }.get(status_val, "queue")
+            
+            # Duration
+            duration_sec = None
+            if started and completed:
+                duration_sec = (completed - started).total_seconds()
+            elif started and status_val == "running":
+                from datetime import datetime as _dt
+                duration_sec = (_dt.utcnow() - started).total_seconds()
+            
+            has_deliverable = bool(report_path or gdrive_url)
+            
+            cards.append({
+                "id":               job_id,
+                "kanban_col":       kanban_col,
+                "status":           status_val,
+                "type":             job_type,
+                "agent":            agent or (chain_steps[0]["agent"] if chain_steps else ""),
+                "model":            model,
+                "chain_id":         chain_id,
+                "chain_steps":      chain_steps[:5],
+                "chain_target":     chain_target,
+                "chain_summary":    chain_summary,
+                "instruction":      (instruction or chain_target)[:200],
+                "tokens_input":     tok_in,
+                "tokens_output":    tok_out,
+                "cost_usd":         round(cost, 6),
+                "retry_count":      retry_cnt,
+                "quality_score":    quality_score,
+                "eval_loops":       eval_loops,
+                "report_path":      report_path,
+                "gdrive_url":       gdrive_url,
+                "has_deliverable":  has_deliverable,
+                "result_summary":   result_summary,
+                "error_message":    error_msg,
+                "duration_sec":     duration_sec,
+                "clickup_task_id":  clickup_task_id,
+                "clickup_task_name": clickup_task_name,
+                "clickup_priority": clickup_priority,
+                "created_at":       created.isoformat() if created else None,
+                "started_at":       started.isoformat() if started else None,
+                "completed_at":     completed.isoformat() if completed else None,
+                "updated_at":       updated.isoformat() if updated else None,
+            })
+        
+        # Kanban column summary
+        col_counts = {"backlog": 0, "queue": 0, "in_progress": 0, "review": 0, "done": 0}
+        for card in cards:
+            col = card["kanban_col"]
+            if col in col_counts:
+                col_counts[col] += 1
+        
+        return {
+            "cards":      cards,
+            "total":      len(cards),
+            "col_counts": col_counts,
+            "generated":  __import__("datetime").datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.post("/kanban/kill/{job_id}")
+def kill_job(job_id: str):
+    """Cancel a pending or running job."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status in ("completed", "failed", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"Job already {job.status}")
+        
+        prev_status = job.status
+        job.status = "cancelled"
+        job.error_message = "Cancelled by operator"
+        job.completed_at = __import__('datetime').datetime.utcnow()
+        db.commit()
+        
+        # Remove from Redis queue if pending
+        try:
+            redis_client.lrem("queue:default", 0, job_id)
+            redis_client.lrem("queue:orchestrator", 0, job_id)
+        except Exception:
+            pass
+        
+        return {"message": f"Job {job_id} cancelled (was {prev_status})"}
+    finally:
+        db.close()
+
+
+@app.get("/kanban/activity/{chain_id}")
+def get_chain_activity(chain_id: str):
+    """Get full activity log for a chain."""
+    db = SessionLocal()
+    try:
+        from sqlalchemy import text as _text
+        query = """
+            SELECT agent, status, started_at, completed_at, error_message, meta
+            FROM chain_steps
+            WHERE chain_id = :chain_id
+            ORDER BY started_at ASC
+        """
+        rows = db.execute(_text(query), {"chain_id": chain_id}).fetchall()
+        steps = []
+        for r in rows:
+            steps.append({
+                "agent":        r[0],
+                "status":       r[1],
+                "started_at":   r[2].isoformat() if r[2] else None,
+                "completed_at": r[3].isoformat() if r[3] else None,
+                "error":        r[4],
+                "meta":         r[5] or {},
+            })
+        return {"chain_id": chain_id, "steps": steps}
+    finally:
+        db.close()
+
+# ══════════════════════════════════════════════════════════════════════════════
 # --------------------------------------------------
 # METRICS
 # --------------------------------------------------
