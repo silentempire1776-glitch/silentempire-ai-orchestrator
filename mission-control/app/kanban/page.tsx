@@ -62,6 +62,99 @@ export default function KanbanPage() {
     } catch(e) { console.error(e) }
     setFullDataLoading(false)
   }
+  const askJarvis = async (mc: Card, fd: Record<string,any>|null) => {
+    const context = [
+      `=== KANBAN JOB CONTEXT ===`,
+      `Job ID: ${mc.id}`,
+      `Agent: ${mc.agent}`,
+      `Status: ${mc.status}`,
+      `Model: ${mc.model}`,
+      `Quality Score: ${mc.quality_score != null ? mc.quality_score + "/10" : "none"}`,
+      `Eval Loops: ${mc.eval_loops || 0}`,
+      `Cost: $${mc.cost_usd?.toFixed(4) || "0"}`,
+      `Duration: ${mc.duration_sec ? mc.duration_sec + "s" : "unknown"}`,
+      `Created: ${mc.created_at || "unknown"}`,
+      `Completed: ${mc.completed_at || "unknown"}`,
+      mc.clickup_task_id ? `ClickUp Task: ${mc.clickup_task_id} — ${mc.clickup_task_name || ""}` : "",
+      mc.chain_id ? `Chain ID: ${mc.chain_id}` : "",
+      ``,
+      `=== TASK INSTRUCTIONS ===`,
+      mc.instruction || "(none)",
+      ``,
+      `=== RESULT / OUTPUT ===`,
+      mc.result_summary || "(none)",
+      mc.error_message ? `
+=== ERROR ===
+${mc.error_message}` : "",
+      fd?.eval_feedback ? `
+=== EVALUATOR FEEDBACK ===
+${fd.eval_feedback}` : "",
+      ``,
+      `=== END KANBAN JOB CONTEXT ===`,
+      ``,
+      `I am looking at this job card in Mission Control. Please analyze this job and tell me:`,
+      `1. What the agent actually did vs what it was asked to do`,
+      `2. Why it scored ${mc.quality_score != null ? String(mc.quality_score) + "/10" : "unknown"}`,
+      `3. What should be fixed to improve quality`,
+    ].filter(Boolean).join("\n")
+
+    try {
+      const r = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: context, session_id: "kanban-debug" })
+      })
+      if (r.ok) {
+        window.open("/chat?context=kanban", "_blank")
+      } else {
+        alert("Failed to send to Jarvis. Open /chat and paste the job ID manually.")
+      }
+    } catch(e) {
+      alert("Could not reach Jarvis API. Open /chat manually.")
+    }
+  }
+
+  const downloadContext = (mc: Card, fd: Record<string,any>|null) => {
+    const lines = [
+      `SILENT EMPIRE — JOB CONTEXT EXPORT`,
+      `Exported: ${new Date().toISOString()}`,
+      ``,
+      `JOB ID:        ${mc.id}`,
+      `AGENT:         ${mc.agent}`,
+      `STATUS:        ${mc.status}`,
+      `MODEL:         ${mc.model}`,
+      `QUALITY SCORE: ${mc.quality_score != null ? mc.quality_score + "/10" : "none"}`,
+      `EVAL LOOPS:    ${mc.eval_loops || 0}`,
+      `COST:          $${mc.cost_usd?.toFixed(4) || "0"}`,
+      `DURATION:      ${mc.duration_sec || "unknown"}s`,
+      `TOKENS IN:     ${mc.tokens_input || 0}`,
+      `TOKENS OUT:    ${mc.tokens_output || 0}`,
+      `CREATED:       ${mc.created_at || "unknown"}`,
+      `COMPLETED:     ${mc.completed_at || "unknown"}`,
+      `CLICKUP TASK:  ${mc.clickup_task_id || "none"} ${mc.clickup_task_name || ""}`,
+      `CHAIN ID:      ${mc.chain_id || "none"}`,
+      ``,
+      `═══ TASK INSTRUCTIONS ═══`,
+      fd?.full_instruction || mc.instruction || "(none)",
+      ``,
+      `═══ FULL OUTPUT ═══`,
+      fd?.full_result || mc.result_summary || "(none)",
+      ``,
+      `═══ EVALUATOR FEEDBACK ═══`,
+      fd?.eval_feedback || "(none)",
+      ``,
+      `═══ ERROR ═══`,
+      mc.error_message || "(none)",
+    ]
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `job_${mc.id.slice(0,8)}_${mc.agent}_${new Date().toISOString().slice(0,10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const [lastUpdate, setLastUpdate] = useState("")
   const boardRef = useRef<HTMLDivElement>(null)
   const dragState = useRef<{dragging:boolean;startX:number;startY:number;scrollLeft:number;scrollTop:number}>({dragging:false,startX:0,startY:0,scrollLeft:0,scrollTop:0})
@@ -348,7 +441,19 @@ export default function KanbanPage() {
                 <span style={{fontSize:12,padding:"3px 8px",borderRadius:3,background:isFail?"#5a1f1f":isRun?"#5a4a00":"#1e3a2e",color:isFail?"#f87171":isRun?"#fbbf24":"#6ee7b7"}}>{mc.status}</span>
                 {mc.clickup_priority && <span style={{fontSize:11,color:"#6b7280",background:"#1a1a2e",border:"1px solid #2d2d45",padding:"2px 6px",borderRadius:3}}>{mc.clickup_priority}</span>}
                 {mc.type && <span style={{fontSize:11,color:"#4b5563",background:"#1a1a2e",border:"1px solid #2d2d45",padding:"2px 6px",borderRadius:3}}>{mc.type}</span>}
-                <button onClick={()=>{setModalCard(null);setFullData(null)}} style={{marginLeft:"auto",background:"#1e1e30",border:"1px solid #2d2d45",color:"#94a3b8",width:32,height:32,borderRadius:6,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+                  <button onClick={()=>downloadContext(mc,fullData)}
+                    title="Download full job context as text file"
+                    style={{background:"#1a1a2e",border:"1px solid #3d3d60",color:"#60a5fa",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+                    ⬇ Export
+                  </button>
+                  <button onClick={()=>askJarvis(mc,fullData)}
+                    title="Send job context to Jarvis chat for analysis"
+                    style={{background:"#0f1f3a",border:"1px solid #1d4ed8",color:"#93c5fd",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:11,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+                    🤖 Ask Jarvis
+                  </button>
+                  <button onClick={()=>{setModalCard(null);setFullData(null)}} style={{background:"#1e1e30",border:"1px solid #2d2d45",color:"#94a3b8",width:32,height:32,borderRadius:6,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                </div>
               </div>
 
               <div style={{padding:"20px 24px",display:"flex",flexDirection:"column",gap:16}}>
@@ -564,16 +669,17 @@ export default function KanbanPage() {
                       style={{background:"#2d1515",border:"1px solid #5a2020",color:"#f87171",padding:"10px 8px",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>
                       👎 Poor Quality
                     </button>
-                    <button onClick={async()=>{await fetch(`/api/kanban/feedback/${mc.id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rating:"acceptable",job_id:mc.id,agent:mc.agent,model:mc.model})});alert("Marked as acceptable")}}
-                      style={{background:"#1a1a2e",border:"1px solid #2d2d45",color:"#94a3b8",padding:"10px 8px",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>
-                      👌 Acceptable
+                    <button onClick={()=>askJarvis(mc,fullData)}
+                      title="Send full job context to Jarvis for analysis"
+                      style={{background:"#0f1f3a",border:"1px solid #1d4ed8",color:"#93c5fd",padding:"10px 8px",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>
+                      🤖 Ask Jarvis
                     </button>
                     <button onClick={async()=>{await fetch(`/api/kanban/feedback/${mc.id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rating:"elite",job_id:mc.id,agent:mc.agent,model:mc.model})});alert("Saved to agent memory as elite example")}}
                       style={{background:"#0f291f",border:"1px solid #065f46",color:"#34d399",padding:"10px 8px",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>
                       ⭐ Elite
                     </button>
                   </div>
-                  <div style={{marginTop:6,fontSize:10,color:"#374151",textAlign:"center"}}>Elite saves output to agent memory. Poor flags for review.</div>
+                  <div style={{marginTop:6,fontSize:10,color:"#374151",textAlign:"center"}}>Elite saves output to agent memory. Poor flags for review. Ask Jarvis sends full context to chat.</div>
                 </div>
 
                 {/* Kill button */}

@@ -44,8 +44,8 @@ import urllib.error
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 SECRETS_DIR   = "/ai-firm/config/secrets/google"
-CREDS_PATH    = f"{SECRETS_DIR}/credentials.json"
-TOKEN_PATH    = f"{SECRETS_DIR}/token.json"
+CREDS_PATH    = "/ai-firm/config/secrets/google/credentials.json"
+TOKEN_PATH    = "/ai-firm/config/secrets/google/token.json"
 DRIVE_BASE    = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD  = "https://www.googleapis.com/upload/drive/v3"
 DOCS_BASE     = "https://docs.googleapis.com/v1"

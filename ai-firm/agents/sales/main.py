@@ -12,7 +12,7 @@ from typing import Any, Dict
 from shared.redis_bus import enqueue, dequeue_blocking
 from shared.artifact import build_artifact
 from shared.artifact_store import stage_already_completed, mark_stage_completed
-from job_runner import (submit_and_wait, submit_and_wait_with_eval,
+from job_runner import (submit_and_wait, submit_and_wait_with_eval, deliver_result,
                         extract_save_path, write_report,
                         read_agent_memory, write_agent_memory, summarize_to_memory)
 from config_loader import get_agent_config, get_company_name
@@ -102,6 +102,7 @@ def process_task(raw_envelope):
     task_type = envelope.get("task_type")
     payload   = _as_dict(envelope.get("payload"))
     chain_id  = payload.get("chain_id") or envelope.get("chain_id")
+    clickup_task_id = envelope.get("clickup_task_id") or payload.get("clickup_task_id") or ""
 
     if not task_type:
         print("[SALES] Missing task_type, skipping", flush=True)
@@ -138,6 +139,15 @@ def process_task(raw_envelope):
     if save_path and result_text:
         if write_report(save_path, result_text, AGENT_NAME):
             file_written = save_path
+    # Deliver to Google Drive + post back to ClickUp
+    _task_title = (payload.get('instruction') or payload.get('message') or payload.get('target') or '')[:60]
+    gdrive_url = deliver_result(
+        agent_name=AGENT_NAME,
+        result_text=result_text or '',
+        clickup_task_id=clickup_task_id,
+        task_title=_task_title,
+        quality_score=0,
+    )
 
     if chain_id:
         mark_stage_completed(chain_id, AGENT_NAME)

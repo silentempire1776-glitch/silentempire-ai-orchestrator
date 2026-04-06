@@ -464,6 +464,97 @@ Do NOT repeat the same mistakes. Execute the task completely."""
 
 
 # ==================================================
+# DELIVERY — Google Drive + ClickUp post-back
+# ==================================================
+
+def deliver_result(
+    agent_name: str,
+    result_text: str,
+    clickup_task_id: str = "",
+    task_title: str = "",
+    quality_score: int = 0,
+) -> str:
+    """
+    After eval: upload to Google Drive, post link to ClickUp.
+    Returns gdrive_url or "" on failure.
+    """
+    if not result_text or len(result_text.strip()) < 50:
+        print(f"[{agent_name.upper()}] deliver_result: result too short, skipping", flush=True)
+        return ""
+
+    import subprocess as _sp
+    import os as _os
+
+    gdrive_url = ""
+    gdrive_cli = "/ai-firm/tools/google_drive_cli.py"
+    clickup_cli = "/ai-firm/tools/clickup_cli.py"
+
+    # Write result to temp file
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    safe_title = (task_title or "report")[:40].replace(" ", "-").replace("/", "-").lower()
+    tmp_path = f"/tmp/{ts}_{agent_name}_{safe_title}.md"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(result_text)
+    except Exception as e:
+        print(f"[{agent_name.upper()}] Temp file write failed: {e}", flush=True)
+        return ""
+
+    # Upload to Google Drive
+    doc_title = f"{datetime.now().strftime('%Y-%m-%d')} - {agent_name.title()} - {(task_title or 'Report')[:50]}"
+    try:
+        gd = _sp.run(
+            ["python3", gdrive_cli, "agent-save", agent_name, tmp_path, doc_title],
+            capture_output=True, text=True, timeout=60
+        )
+        if gd.returncode == 0:
+            for line in gd.stdout.splitlines():
+                if line.strip().startswith("URL:"):
+                    gdrive_url = line.split("URL:", 1)[1].strip()
+                    break
+            print(f"[{agent_name.upper()}] Google Doc created: {gdrive_url}", flush=True)
+        else:
+            print(f"[{agent_name.upper()}] Google Drive upload failed: {gd.stderr[:200]}", flush=True)
+    except Exception as e:
+        print(f"[{agent_name.upper()}] Google Drive exception: {e}", flush=True)
+
+    try:
+        _os.remove(tmp_path)
+    except Exception:
+        pass
+
+    # Post back to ClickUp
+    if clickup_task_id and clickup_task_id.strip():
+        summary_lines = [l for l in result_text.splitlines() if l.strip()][:8]
+        summary = "\n".join(summary_lines)[:600]
+        score_line = f"\nQuality Score: {quality_score}/10" if quality_score else ""
+        gdrive_line = f"\n\nGoogle Drive Report:\n{gdrive_url}" if gdrive_url else ""
+        no_gdrive = "\n\nWARN: Google Drive upload failed - output in job DB" if not gdrive_url else ""
+
+        comment = (
+            f"[{agent_name.upper()} AGENT] Task Complete"
+            f"{score_line}{gdrive_line}{no_gdrive}"
+            f"\n\nSummary:\n{summary}"
+            f"\n\nCompleted: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+        try:
+            cu = _sp.run(
+                ["python3", clickup_cli, "post-comment", clickup_task_id, comment],
+                capture_output=True, text=True, timeout=30
+            )
+            if cu.returncode == 0:
+                print(f"[{agent_name.upper()}] ClickUp comment posted to {clickup_task_id}", flush=True)
+            else:
+                print(f"[{agent_name.upper()}] ClickUp post failed: {cu.stderr[:100]}", flush=True)
+        except Exception as e:
+            print(f"[{agent_name.upper()}] ClickUp exception: {e}", flush=True)
+    else:
+        print(f"[{agent_name.upper()}] No clickup_task_id - skipping ClickUp post-back", flush=True)
+
+    return gdrive_url
+
+
+# ==================================================
 # PER-AGENT MEMORY — Persistent knowledge base
 # ==================================================
 

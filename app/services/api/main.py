@@ -443,6 +443,7 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
             
             # Extract from payload
             agent      = payload.get("agent", "")
+            import re as _re2  # ensure in scope for all branches
             # For jarvis_chat: extract the user message as instruction
             if job_type == "jarvis_chat":
                 _msgs = payload.get("messages", [])
@@ -489,7 +490,6 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
                     _user_msg or ""
                 )
                 # Strip doctrine headers — extract actual task
-                import re as _re2
                 raw_str = str(raw_instr)
                 # Split on === blocks and take last non-empty segment
                 # Split on === blocks and find actual task content
@@ -567,12 +567,11 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
             if isinstance(result, dict) and "content" in result:
                 content_text = str(result.get("content", ""))
                 if "score=" in content_text:
-                    import re
-                    m = re.search(r'score=(\d+)', content_text)
+                    m = _re2.search(r'score=(\d+)', content_text)
                     if m:
                         quality_score = int(m.group(1))
                 if "loop" in content_text.lower():
-                    m2 = re.search(r'[Ll]oop\s+(\d+)', content_text)
+                    m2 = _re2.search(r'[Ll]oop\s+(\d+)', content_text)
                     if m2:
                         eval_loops = int(m2.group(1))
             

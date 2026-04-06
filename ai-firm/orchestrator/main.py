@@ -445,6 +445,14 @@ ClickUp tasks: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py list-tasks LIST_
 ClickUp create task: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py create-task LIST_ID "Title"[/EXEC]
 ClickUp post comment: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py post-comment TASK_ID "comment"[/EXEC]
 ClickUp complete: [EXEC:bash]python3 /ai-firm/tools/clickup_cli.py complete-task TASK_ID[/EXEC]
+Google Drive list folder: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-list-folder FOLDER_ID[/EXEC]
+Google Drive search: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-search "query"[/EXEC]
+Google Drive upload file: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-upload /path/to/file.md FOLDER_ID[/EXEC]
+Google Drive create doc from file: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-create-doc /path/to/file.md "Doc Title" FOLDER_ID[/EXEC]
+Google Drive save agent report: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py agent-save AGENT_NAME /path/to/file.md "Report Title"[/EXEC]
+Google Drive read doc: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-read-doc FILE_ID[/EXEC]
+Google Drive get link: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-link FILE_ID[/EXEC]
+Google Drive create folder: [EXEC:bash]python3 /ai-firm/tools/google_drive_cli.py drive-mkdir "Folder Name" PARENT_ID[/EXEC]
 Dispatch agent: [DISPATCH:agent-name]Full instruction with save path[/DISPATCH]
 
 ## SMART DISPATCH — SELECT 1-3 AGENTS ONLY
@@ -470,6 +478,20 @@ CRITICAL: ALWAYS use [EXEC:bash] tags — NEVER write plain bash commands in you
 CRITICAL: EXEC failure = report exact error verbatim, never invent output or fake success.
 CRITICAL: File not found = say so exactly, never invent file contents.
 --- END TOOLS ---
+
+--- TOOL EXECUTION RULES — NON-NEGOTIABLE ---
+1. NEVER fabricate a <tool_response> block. If the bash output shows Exit 1 or an error,
+   report the actual error to the user. Do NOT invent a success response.
+2. If a command returns "Exit 1: Commands: ..." that means you used the WRONG command name.
+   Stop immediately, check the TOOLS list above for the correct command, and retry.
+3. If a tool says "File not found" or "No module named X", that is a real error — do NOT
+   pretend the operation succeeded.
+4. Every [EXEC:bash] block must be followed by showing the ACTUAL output to the user.
+   Never skip showing the output.
+5. If you are unsure which command to use, run --help first:
+   [EXEC:bash]python3 /ai-firm/tools/TOOLNAME.py --help 2>&1 | head -20[/EXEC]
+--- END TOOL EXECUTION RULES ---
+
 
 --- LIVE SYSTEM DATA ---
 {live}
@@ -1856,6 +1878,39 @@ def _send_proactive_update():
         session_id = session.get("id")
         if not session_id:
             return
+
+        # ── Dedup: skip if we already sent a proactive about this sprint state ──
+        try:
+            import hashlib as _hashlib
+            # Build a fingerprint from the ClickUp sprint task IDs that are in To Do
+            # so we don't repeat the same pitch more than once per 6 hours
+            dedup_key = "jarvis:proactive:last_sprint_hash"
+            ttl_seconds = 6 * 3600  # 6 hours
+
+            import subprocess as _sp2
+            _sprint_raw = _sp2.run(
+                ["python3", "/ai-firm/tools/clickup_cli.py", "list-tasks", "901710993025"],
+                capture_output=True, text=True, timeout=15
+            ).stdout or ""
+            _fingerprint = _hashlib.md5(_sprint_raw.encode()).hexdigest()[:12]
+
+            _redis_check = _sp2.run(
+                ["docker", "exec", "app-redis-1", "redis-cli", "GET", dedup_key],
+                capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+
+            if _redis_check == _fingerprint:
+                print(f"[PROACTIVE] Sprint state unchanged (hash={_fingerprint}), skipping duplicate update")
+                return
+
+            # Store the fingerprint with TTL
+            _sp2.run(
+                ["docker", "exec", "app-redis-1", "redis-cli", "SET", dedup_key, _fingerprint, "EX", str(ttl_seconds)],
+                capture_output=True, timeout=5
+            )
+            print(f"[PROACTIVE] New sprint state (hash={_fingerprint}), proceeding with update")
+        except Exception as _dedup_err:
+            print(f"[PROACTIVE] Dedup check failed (non-fatal): {_dedup_err}")
 
         # Build a proactive status message
         live = _fetch_live_data()
