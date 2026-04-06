@@ -423,6 +423,36 @@ Do NOT repeat the same mistakes. Execute the task completely."""
             print(f"[{agent_name.upper()}] Score {score} below {threshold}, revising...", flush=True)
 
     print(f"[{agent_name.upper()}] Final score={best_score}/10 after {loop} loop(s)", flush=True)
+    # Persist quality_score + eval_loops to DB via API (non-fatal if fails)
+    try:
+        import os as _os, requests as _req
+        _api_base = _os.getenv("API_BASE_URL", "http://api:8000").rstrip("/")
+        # Find the most recently completed job for this agent within last 10 minutes
+        _r = _req.get(
+            f"{_api_base}/kanban/cards?limit=10",
+            timeout=5
+        )
+        if _r.ok:
+            _cards = _r.json().get("cards", [])
+            for _c in _cards:
+                if (_c.get("agent") == agent_name and
+                    _c.get("status") in ("completed", "running")):
+                    _job_id = _c.get("id")
+                    _req.post(
+                        f"{_api_base}/jobs/{_job_id}/eval",
+                        json={
+                            "quality_score": best_score,
+                            "eval_loops": loop,
+                            "feedback": (revision_feedback
+                                        if 'revision_feedback' in dir()
+                                        else "")
+                        },
+                        timeout=5
+                    )
+                    print(f"[{agent_name.upper()}] Eval persisted → job {_job_id[:8]}", flush=True)
+                    break
+    except Exception as _eval_e:
+        print(f"[{agent_name.upper()}] Eval persist skipped: {_eval_e}", flush=True)
     # Persist memory for scores >= 6
     if best_score >= 6 and best_result:
         try:

@@ -443,6 +443,21 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
             
             # Extract from payload
             agent      = payload.get("agent", "")
+            # For jarvis_chat: extract the user message as instruction
+            if job_type == "jarvis_chat":
+                _msgs = payload.get("messages", [])
+                if isinstance(_msgs, list):
+                    for _m in _msgs:
+                        if isinstance(_m, dict) and _m.get("role") == "user":
+                            _user_content = _m.get("content", "")
+                            if isinstance(_user_content, str):
+                                instruction = _user_content[:3000]
+                            elif isinstance(_user_content, list):
+                                for _part in _user_content:
+                                    if isinstance(_part, dict) and _part.get("type") == "text":
+                                        instruction = _part.get("text", "")[:3000]
+                                        break
+                            break
             chain_id   = (payload.get("chain_id") or 
                          payload.get("payload", {}).get("chain_id", "") 
                          if isinstance(payload, dict) else "")
@@ -498,9 +513,9 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
                     if len(stripped) > 15:
                         meaningful.append(stripped)
                 if meaningful:
-                    clean_instr = meaningful[-1][:300]
+                    clean_instr = meaningful[-1][:3000]
                 else:
-                    clean_instr = _re2.sub(r'\{\}\s*', '', raw_str).strip()[:300]
+                    clean_instr = _re2.sub(r'\{\}\s*', '', raw_str).strip()[:3000]
                 # Try to extract ClickUp task name + description (highest signal)
                 _cu_task = ""
                 _cu_name_m = _re2.search(r'CLICKUP TASK:\s*(.+?)\n', raw_str)
@@ -514,7 +529,7 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
                     _cu_task = _re2.sub(
                         r"\s*—\s*CURTIS'S DIRECTION:[\s\S]*", "", _cu_task
                     ).strip()
-                    instruction = _cu_task[:300]
+                    instruction = _cu_task[:3000]
                 else:
                     # Final cleanup of best segment
                     clean_instr = _re2.sub(r'Your previous attempt scored \d+/10[^\n]*\n?', '', clean_instr)
@@ -539,11 +554,14 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
             eval_loops    = 0
             result_summary = ""
             if isinstance(result, dict):
-                report_path   = result.get("file_path") or result.get("report_path") or ""
+                report_path   = result.get("file_path") or result.get("report_path") or result.get("file_written") or ""
                 gdrive_url    = result.get("gdrive_url") or result.get("google_doc_url") or ""
                 quality_score = result.get("quality_score") or result.get("score")
                 eval_loops    = result.get("eval_loops") or result.get("loop_count") or 0
-                result_summary = (result.get("summary") or result.get("content") or "")[:400]
+                result_summary = (result.get("summary") or result.get("content") or result.get("report") or "")[:5000]
+            elif isinstance(result, str) and result.strip():
+                # Raw string result (most agent jobs store plain text)
+                result_summary = result.strip()[:5000]
             
             # Try to extract from result content text
             if isinstance(result, dict) and "content" in result:
@@ -628,6 +646,153 @@ def get_kanban_cards(limit: int = 500, status: str = None, exclude_archived: boo
             "col_counts": col_counts,
             "generated":  __import__("datetime").datetime.utcnow().isoformat(),
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.post("/jobs/{job_id}/eval")
+def update_job_eval(job_id: str, data: dict):
+    """Persist quality_score and eval_loops from job_runner back to job record."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        # Store eval data in result JSON, preserving existing content
+        existing = job.result or {}
+        if isinstance(existing, str):
+            existing = {"content": existing}
+        if not isinstance(existing, dict):
+            existing = {}
+        existing["quality_score"] = data.get("quality_score")
+        existing["eval_loops"] = data.get("eval_loops")
+        existing["eval_feedback"] = data.get("feedback", "")
+        job.result = existing
+        db.commit()
+        return {"ok": True, "job_id": job_id, "quality_score": data.get("quality_score")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/jobs/{job_id}/full")
+def get_job_full(job_id: str):
+    """Return complete payload and result for a job — called on-demand from Kanban modal."""
+    db = SessionLocal()
+    try:
+        from sqlalchemy import text as _text
+        row = db.execute(_text(
+            "SELECT id, type, status, payload, result, error_message, "
+            "tokens_input, tokens_output, estimated_cost_usd, "
+            "started_at, completed_at, created_at, updated_at, "
+            "model_used, provider, retry_count "
+            "FROM jobs WHERE id = :id"
+        ), {"id": job_id}).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        payload = row[3] or {}
+        result  = row[4]
+        # Extract full instruction from payload
+        full_instruction = ""
+        msgs = payload.get("messages", []) if isinstance(payload, dict) else []
+        for m in msgs:
+            if isinstance(m, dict) and m.get("role") == "user":
+                c = m.get("content", "")
+                full_instruction = c if isinstance(c, str) else str(c)
+                break
+        if not full_instruction and isinstance(payload, dict):
+            inner = payload.get("payload", {}) or {}
+            full_instruction = (
+                inner.get("instruction") or inner.get("message") or inner.get("target") or
+                payload.get("instruction") or payload.get("message") or payload.get("target") or ""
+            )
+        # Extract full result
+        full_result = ""
+        quality_score = None
+        eval_loops = 0
+        eval_feedback = ""
+        if isinstance(result, str):
+            full_result = result
+        elif isinstance(result, dict):
+            full_result = (result.get("content") or result.get("report") or
+                          result.get("summary") or result.get("text") or str(result))
+            quality_score = result.get("quality_score") or result.get("score")
+            eval_loops = result.get("eval_loops") or result.get("loop_count") or 0
+            eval_feedback = result.get("eval_feedback") or result.get("feedback") or ""
+        return {
+            "id": str(row[0]),
+            "type": row[1],
+            "status": row[2],
+            "full_instruction": full_instruction,
+            "full_result": full_result,
+            "quality_score": quality_score,
+            "eval_loops": eval_loops,
+            "eval_feedback": eval_feedback,
+            "error_message": row[5],
+            "tokens_input": row[6],
+            "tokens_output": row[7],
+            "cost_usd": row[8],
+            "started_at": row[9].isoformat() if row[9] else None,
+            "completed_at": row[10].isoformat() if row[10] else None,
+            "created_at": row[11].isoformat() if row[11] else None,
+            "updated_at": row[12].isoformat() if row[12] else None,
+            "model": row[13],
+            "provider": row[14],
+            "retry_count": row[15] or 0,
+            "payload_raw": payload,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.post("/kanban/feedback/{job_id}")
+def submit_job_feedback(job_id: str, data: dict):
+    """Store training feedback (poor/acceptable/elite) on a job.
+    Elite rating also triggers agent memory update."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        existing = job.result or {}
+        if isinstance(existing, str):
+            existing = {"content": existing}
+        if not isinstance(existing, dict):
+            existing = {}
+        existing["training_rating"] = data.get("rating")
+        existing["training_rated_at"] = __import__("datetime").datetime.utcnow().isoformat()
+        job.result = existing
+        db.commit()
+        # If elite, write to agent memory file
+        rating = data.get("rating")
+        if rating == "elite":
+            try:
+                import os, json
+                agent = data.get("agent", "")
+                mem_path = f"/srv/silentempire/ai-firm/data/memory/agents/{agent}/core.md"
+                result_snippet = str(existing.get("content", ""))[:500]
+                instruction_snippet = data.get("instruction", "")[:300]
+                entry = f"\n\n---\n**ELITE EXAMPLE** (rated {existing['training_rated_at'][:10]})\n"
+                entry += f"Task: {instruction_snippet}\n"
+                entry += f"Output snippet: {result_snippet}\n"
+                if os.path.exists(mem_path):
+                    with open(mem_path, "a") as f:
+                        f.write(entry)
+                    print(f"[FEEDBACK] Elite example appended to {agent} memory", flush=True)
+            except Exception as mem_e:
+                print(f"[FEEDBACK] Memory write failed (non-fatal): {mem_e}", flush=True)
+        return {"ok": True, "job_id": job_id, "rating": rating}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

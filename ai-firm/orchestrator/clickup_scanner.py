@@ -323,8 +323,7 @@ def is_curtis_comment(comment: dict) -> bool:
 
     # Additional bot pattern check — Jarvis acknowledgment format
     bot_patterns = [
-        "Dispatching:", "Agent
-Direction:", "Chain tracking active",
+        "Dispatching:", "Agent Direction:", "Chain tracking active",
         "AGENT COMPLETE", "Task dispatched", "chain_id=",
         "Report saved", "Google Drive", "COMPLETION_SUMMARY",
     ]

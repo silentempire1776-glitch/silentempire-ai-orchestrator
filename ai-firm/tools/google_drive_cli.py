@@ -3,7 +3,7 @@
 Silent Empire AI — Google Drive & Docs CLI
 ==========================================
 Follows exact same OAuth pattern as OpenClaw google_api_cli.py.
-Tokens stored at: /srv/silentempire/ai-firm/config/secrets/google/
+Tokens stored at: /ai-firm/config/secrets/google/
 
 COMMANDS:
   auth-url                          Print OAuth URL (open in browser)
@@ -43,7 +43,7 @@ import urllib.error
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-SECRETS_DIR   = "/srv/silentempire/ai-firm/config/secrets/google"
+SECRETS_DIR   = "/ai-firm/config/secrets/google"
 CREDS_PATH    = f"{SECRETS_DIR}/credentials.json"
 TOKEN_PATH    = f"{SECRETS_DIR}/token.json"
 DRIVE_BASE    = "https://www.googleapis.com/drive/v3"
@@ -51,14 +51,14 @@ DRIVE_UPLOAD  = "https://www.googleapis.com/upload/drive/v3"
 DOCS_BASE     = "https://docs.googleapis.com/v1"
 
 # ── Agent → Drive folder mapping — loaded from business.json ──────────────────
-# Edit /srv/silentempire/ai-firm/config/business.json → google_drive section
+# Edit /ai-firm/config/business.json → google_drive section
 # No code changes needed when Drive structure changes.
 
 # DYNAMIC_DRIVE_CONFIG
 def _load_drive_config() -> dict:
     """Load Drive folder config from business.json. Falls back to root folder."""
     for path in [
-        "/srv/silentempire/ai-firm/config/business.json",
+        "/ai-firm/config/business.json",
         "/ai-firm/config/business.json",
     ]:
         try:
@@ -87,13 +87,13 @@ def _get_root_folder() -> str:
 def _get_creds_path() -> str:
     return _get_drive_cfg().get(
         "credentials_path",
-        "/srv/silentempire/ai-firm/config/secrets/google/credentials.json"
+        "/ai-firm/config/secrets/google/credentials.json"
     )
 
 def _get_token_path() -> str:
     return _get_drive_cfg().get(
         "token_path",
-        "/srv/silentempire/ai-firm/config/secrets/google/token.json"
+        "/ai-firm/config/secrets/google/token.json"
     )
 
 # Legacy compatibility — used by functions that reference these directly

@@ -47,7 +47,21 @@ export default function KanbanPage() {
   const [modalCard, setModalCard] = useState<Card|null>(null)
   const [filterDeliverable, setFilterDeliverable] = useState(false)
   const [filterModel, setFilterModel] = useState("")
+  const [sortField, setSortField] = useState<"created_at"|"cost_usd"|"duration_sec"|"quality_score">("created_at")
+  const [sortDir, setSortDir] = useState<"desc"|"asc">("desc")
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [fullData, setFullData] = useState<Record<string,any>|null>(null)
+  const [fullDataLoading, setFullDataLoading] = useState(false)
+
+  const loadFullData = async (jobId: string) => {
+    setFullData(null)
+    setFullDataLoading(true)
+    try {
+      const r = await fetch(`/api/jobs/${jobId}/full`)
+      if (r.ok) setFullData(await r.json())
+    } catch(e) { console.error(e) }
+    setFullDataLoading(false)
+  }
   const [lastUpdate, setLastUpdate] = useState("")
   const boardRef = useRef<HTMLDivElement>(null)
   const dragState = useRef<{dragging:boolean;startX:number;startY:number;scrollLeft:number;scrollTop:number}>({dragging:false,startX:0,startY:0,scrollLeft:0,scrollTop:0})
@@ -111,7 +125,22 @@ export default function KanbanPage() {
 
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
 
-  const byCol = (col: string) => filtered
+  const sortCards = (arr: Card[]) => arr.sort((a, b) => {
+    let va: number, vb: number
+    if (sortField === "created_at") {
+      va = a.created_at ? new Date(a.created_at).getTime() : 0
+      vb = b.created_at ? new Date(b.created_at).getTime() : 0
+    } else if (sortField === "cost_usd") {
+      va = a.cost_usd || 0; vb = b.cost_usd || 0
+    } else if (sortField === "duration_sec") {
+      va = a.duration_sec || 0; vb = b.duration_sec || 0
+    } else {
+      va = a.quality_score || 0; vb = b.quality_score || 0
+    }
+    return sortDir === "desc" ? vb - va : va - vb
+  })
+
+  const byCol = (col: string) => sortCards(filtered
     .filter(c => {
       if (resolveCol(c) !== col) return false
       if (col === "done") {
@@ -121,7 +150,7 @@ export default function KanbanPage() {
       }
       return true
     })
-    .sort((a, b) => (new Date(b.created_at||0).getTime()) - (new Date(a.created_at||0).getTime()))
+    .slice())
 
   const archiveCards = filtered
     .filter(c => {
@@ -174,6 +203,19 @@ export default function KanbanPage() {
             {models.map(m=><option key={m} value={m}>{m.split("/").pop()?.slice(0,24)}</option>)}
           </select>
           {(search||filterAgent||filterStatus||filterModel||filterDeliverable) && <button onClick={()=>{setSearch("");setFilterAgent("");setFilterStatus("");setFilterModel("");setFilterDeliverable(false)}} style={{background:"#2d1515",border:"1px solid #5a2020",color:"#f87171",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:11}}>✕ Clear</button>}
+          <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+            <span style={{fontSize:10,color:"#374151"}}>SORT</span>
+            <select value={sortField} onChange={e=>setSortField(e.target.value as any)} style={{background:"#1a1a2e",border:"1px solid #2d2d45",color:"#94a3b8",padding:"4px 6px",borderRadius:6,fontSize:11}}>
+              <option value="created_at">Date</option>
+              <option value="cost_usd">Cost</option>
+              <option value="duration_sec">Duration</option>
+              <option value="quality_score">Quality</option>
+            </select>
+            <button onClick={()=>setSortDir(d=>d==="desc"?"asc":"desc")}
+              style={{background:"#1a1a2e",border:"1px solid #2d2d45",color:"#94a3b8",padding:"4px 8px",borderRadius:6,cursor:"pointer",fontSize:12,minWidth:32}}>
+              {sortDir==="desc"?"↓":"↑"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -295,7 +337,7 @@ export default function KanbanPage() {
         const isFail = mc.status === "failed"
         const isRun = mc.status === "running" || mc.status === "pending"
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)setModalCard(null)}}
+          <div onClick={e=>{if(e.target===e.currentTarget){setModalCard(null);setFullData(null)}}}
             style={{position:"fixed",inset:0,zIndex:50,background:"rgba(0,0,0,0.85)",backdropFilter:"blur(4px)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
             <div style={{width:"100%",maxWidth:860,maxHeight:"92vh",overflowY:"auto",background:"#13131e",border:`1px solid ${ac}40`,borderRadius:16,boxShadow:"0 25px 60px rgba(0,0,0,0.9)"}}>
 
@@ -306,7 +348,7 @@ export default function KanbanPage() {
                 <span style={{fontSize:12,padding:"3px 8px",borderRadius:3,background:isFail?"#5a1f1f":isRun?"#5a4a00":"#1e3a2e",color:isFail?"#f87171":isRun?"#fbbf24":"#6ee7b7"}}>{mc.status}</span>
                 {mc.clickup_priority && <span style={{fontSize:11,color:"#6b7280",background:"#1a1a2e",border:"1px solid #2d2d45",padding:"2px 6px",borderRadius:3}}>{mc.clickup_priority}</span>}
                 {mc.type && <span style={{fontSize:11,color:"#4b5563",background:"#1a1a2e",border:"1px solid #2d2d45",padding:"2px 6px",borderRadius:3}}>{mc.type}</span>}
-                <button onClick={()=>setModalCard(null)} style={{marginLeft:"auto",background:"#1e1e30",border:"1px solid #2d2d45",color:"#94a3b8",width:32,height:32,borderRadius:6,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                <button onClick={()=>{setModalCard(null);setFullData(null)}} style={{marginLeft:"auto",background:"#1e1e30",border:"1px solid #2d2d45",color:"#94a3b8",width:32,height:32,borderRadius:6,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
               </div>
 
               <div style={{padding:"20px 24px",display:"flex",flexDirection:"column",gap:16}}>
@@ -474,6 +516,46 @@ export default function KanbanPage() {
                   <div style={{background:"#200f0f",border:"1px solid #5a1f1f",borderRadius:8,padding:"14px 16px",fontSize:13,color:"#f87171",fontFamily:"monospace",lineHeight:1.6,maxHeight:200,overflowY:"auto",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{mc.error_message}</div>
                 </div>}
 
+                {/* Load Full Data on demand */}
+                <div style={{background:"#0f0f1a",border:"1px solid #2d2d45",borderRadius:8,padding:"12px 16px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:fullData?12:0}}>
+                    <div>
+                      <div style={{fontSize:12,color:"#94a3b8",fontWeight:700}}>📦 Full Job Data</div>
+                      <div style={{fontSize:11,color:"#374151",marginTop:2}}>Complete instructions, full output, eval feedback</div>
+                    </div>
+                    <button
+                      onClick={()=>{ if(fullData){setFullData(null)} else {loadFullData(mc.id)} }}
+                      disabled={fullDataLoading}
+                      style={{background:fullData?"#2d1515":"#1e1e35",border:`1px solid ${fullData?"#5a2020":"#3d3d60"}`,color:fullData?"#f87171":"#60a5fa",padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+                      {fullDataLoading ? "Loading…" : fullData ? "✕ Hide" : "⬇ Load Full Data"}
+                    </button>
+                  </div>
+                  {fullData && (<>
+                    {fullData.full_instruction && <div style={{marginTop:12}}>
+                      <div style={{fontSize:11,color:"#4b5563",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Full Instructions (from DB)</div>
+                      <div style={{background:"#1a1a2e",borderRadius:8,padding:"12px 14px",fontSize:13,color:"#cbd5e1",lineHeight:1.8,maxHeight:400,overflowY:"auto",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{fullData.full_instruction}</div>
+                    </div>}
+                    {fullData.full_result && <div style={{marginTop:10}}>
+                      <div style={{fontSize:11,color:"#4b5563",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Full Output (from DB)</div>
+                      <div style={{background:"#1a1a2e",borderRadius:8,padding:"12px 14px",fontSize:13,color:"#9ca3af",lineHeight:1.8,maxHeight:500,overflowY:"auto",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{fullData.full_result}</div>
+                    </div>}
+                    {(fullData.quality_score != null || fullData.eval_loops > 0) && <div style={{marginTop:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      <div style={{background:"#1a1a2e",borderRadius:8,padding:"10px 14px"}}>
+                        <div style={{fontSize:11,color:"#4b5563",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Quality Score (from DB)</div>
+                        <div style={{fontSize:16,fontWeight:700,color:fullData.quality_score>=8?"#10b981":fullData.quality_score>=6?"#f59e0b":"#ef4444"}}>{fullData.quality_score != null ? `${fullData.quality_score}/10` : "—"}</div>
+                      </div>
+                      <div style={{background:"#1a1a2e",borderRadius:8,padding:"10px 14px"}}>
+                        <div style={{fontSize:11,color:"#4b5563",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Eval Loops (from DB)</div>
+                        <div style={{fontSize:16,fontWeight:700,color:fullData.eval_loops>0?"#f59e0b":"#374151"}}>{fullData.eval_loops||0}</div>
+                      </div>
+                    </div>}
+                    {fullData.eval_feedback && <div style={{marginTop:10}}>
+                      <div style={{fontSize:11,color:"#4b5563",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>Evaluator Feedback</div>
+                      <div style={{background:"#291a0f",border:"1px solid #92400e40",borderRadius:8,padding:"12px 14px",fontSize:13,color:"#fcd34d",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{fullData.eval_feedback}</div>
+                    </div>}
+                  </>)}
+                </div>
+
                 {/* Training feedback buttons */}
                 <div>
                   <div style={{fontSize:11,color:"#4b5563",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Training Feedback</div>
@@ -495,7 +577,7 @@ export default function KanbanPage() {
                 </div>
 
                 {/* Kill button */}
-                {isRun && <button onClick={async()=>{if(!confirm("Kill this job?"))return;await fetch(`/api/kanban/kill/${mc.id}`,{method:"POST"});setModalCard(null);load()}}
+                {isRun && <button onClick={async()=>{if(!confirm("Kill this job?"))return;await fetch(`/api/kanban/kill/${mc.id}`,{method:"POST"});setModalCard(null);setFullData(null);load()}}
                   style={{background:"#2d1515",border:"1px solid #5a2020",color:"#f87171",padding:"12px",borderRadius:8,cursor:"pointer",fontSize:14,fontFamily:"monospace",width:"100%"}}>
                   ✕ Kill Job
                 </button>}

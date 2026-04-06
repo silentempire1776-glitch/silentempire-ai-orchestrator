@@ -773,10 +773,16 @@ def call_llm_jarvis(prompt: str) -> str:
                                 timeout=2)
                             # Also record in jobs table for budget tracking
                             try:
+                                # Include user message and Jarvis response for Kanban visibility
                                 requests.post(f"{API_BASE_URL}/jobs",
                                     json={
                                         "type": "jarvis_chat",
-                                        "payload": {"agent": "jarvis", "model": model},
+                                        "payload": {
+                                            "agent": "jarvis",
+                                            "model": model,
+                                            "messages": [{"role": "user", "content": prompt}],
+                                        },
+                                        "result": str(content)[:8000] if content else "",
                                     },
                                     timeout=2
                                 )
