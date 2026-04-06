@@ -277,11 +277,37 @@ DEFAULT_SCAN_LISTS = {
 }
 
 def get_scan_lists(cfg: dict) -> dict:
-    """Get lists to scan from config or defaults."""
-    custom = cfg.get("clickup", {}).get("scan_lists", {})
-    if custom:
-        return custom
-    return DEFAULT_SCAN_LISTS
+    """Get lists to scan from config or defaults. Respects excluded_folders + excluded_lists."""
+    cu_cfg = cfg.get("clickup", {})
+    custom = cu_cfg.get("scan_lists", {})
+    base = custom if custom else DEFAULT_SCAN_LISTS
+
+    # Load exclusions from business.json (no hardcoding)
+    excluded_folders = set(str(x) for x in cu_cfg.get("excluded_folders", []))
+    excluded_lists   = set(str(x) for x in cu_cfg.get("excluded_lists", []))
+
+    if not excluded_folders and not excluded_lists:
+        return base
+
+    # Filter out excluded lists. For folder exclusion, query the list's folder_id.
+    filtered = {}
+    for name, list_id in base.items():
+        list_id_str = str(list_id)
+        if list_id_str in excluded_lists:
+            print(f"[CLICKUP_OS] Skipping excluded list: {name} ({list_id_str})", flush=True)
+            continue
+        if excluded_folders:
+            try:
+                list_data = cu_get(f"/list/{list_id_str}", {})
+                folder_id = str((list_data.get("folder") or {}).get("id", ""))
+                space_id  = str((list_data.get("space") or {}).get("id", ""))
+                if folder_id in excluded_folders or space_id in excluded_folders:
+                    print(f"[CLICKUP_OS] Skipping list {name} — folder/space {folder_id or space_id} is excluded", flush=True)
+                    continue
+            except Exception as _exc:
+                pass  # Non-fatal — include list if lookup fails
+        filtered[name] = list_id
+    return filtered
 
 # ── Change detection ──────────────────────────────────────────────────────────
 
@@ -770,6 +796,12 @@ def scan_once(cfg: dict) -> int:
         if dispatches_this_scan >= max_dispatches:
             print(f"[CLICKUP_OS] Dispatch cap ({max_dispatches}) reached for this scan cycle", flush=True)
             break
+        # Skip excluded lists (secondary check — get_scan_lists filters most, this catches dynamic additions)
+        _cu_cfg2 = cfg.get("clickup", {})
+        _excl_lists = set(str(x) for x in _cu_cfg2.get("excluded_lists", []))
+        if str(list_id) in _excl_lists:
+            print(f"[CLICKUP_OS] Skipping excluded list {list_id}", flush=True)
+            continue
         try:
             tasks = get_list_tasks(list_id)
             for task_stub in tasks:

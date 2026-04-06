@@ -958,7 +958,7 @@ def jarvis_read_logs(container: str, lines: int = 40) -> str:
         return f"Log error: {e}"
 
 
-def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) -> str:
+def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None, clickup_task_id: str = "") -> str:
     """
     Dispatch a task directly to a specialist agent via Redis.
     Returns confirmation or error.
@@ -1017,17 +1017,19 @@ def jarvis_dispatch_agent(agent: str, instruction: str, chain_id: str = None) ->
             instruction = instruction + f"\n\nSave your completed report to: {_save_path}"
 
         envelope = {
-            "agent":      agent.lower(),
-            "task_type":  task_type,
-            "chain_id":   chain_id,
+            "agent":           agent.lower(),
+            "task_type":       task_type,
+            "chain_id":        chain_id,
+            "clickup_task_id": clickup_task_id,
             "payload": {
-                "instruction": instruction,
-                "agent":       agent.lower(),
-                "chain_id":    chain_id,
-                "task_type":   task_type,
-                "target":      instruction[:80],
-                "product":     instruction[:80],
-                "message":     instruction,
+                "instruction":     instruction,
+                "agent":           agent.lower(),
+                "chain_id":        chain_id,
+                "task_type":       task_type,
+                "target":          instruction[:80],
+                "product":         instruction[:80],
+                "message":         instruction,
+                "clickup_task_id": clickup_task_id,
             },
             "doctrine": doctrine,
         }
@@ -1115,7 +1117,13 @@ def jarvis_process_exec_tags(response_text: str, chain_id: str = None) -> tuple:
     for match in dispatch_pattern.finditer(response_text):
         agent = match.group(1).strip()
         instruction = match.group(2).strip()
-        result = jarvis_dispatch_agent(agent, instruction, chain_id)
+        # Extract clickup_task_id if embedded in instruction
+        _cu_task_id = ""
+        import re as _re_cu
+        _cu_m = _re_cu.search(r'(?:clickup task(?:\s+id)?[:\s]+|task[:\s]+|task id[:\s]+)([0-9a-zA-Z]{6,})', instruction, _re_cu.IGNORECASE)
+        if _cu_m:
+            _cu_task_id = _cu_m.group(1).strip()
+        result = jarvis_dispatch_agent(agent, instruction, chain_id, clickup_task_id=_cu_task_id)
         results.append("[dispatch: " + agent + "]\n" + result)
         tool_outputs.append(f"TOOL [DISPATCH]\nAgent: {agent}\nResult: {result}")
         modified = modified.replace(match.group(0), "*[" + result + "]*")

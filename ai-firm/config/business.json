@@ -93,6 +93,11 @@
       "CODE AGENT",
       "SYSTEMS AGENT",
       "Jarvis received"
-    ]
+    ],
+    "excluded_folders": [
+      "90174184296",
+      "4013766132233109462"
+    ],
+    "excluded_lists": []
   }
 }
